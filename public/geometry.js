@@ -43,8 +43,14 @@ function createAnimatedRig(THREE, modelGroup, side = 'solo') {
 
   // 面向方向：solo 模式朝向镜头(+Z)，对决模式左方('a')朝右(+X)，右方('b')朝左(-X)
   const dirSign = side === 'a' ? 1 : side === 'b' ? -1 : 1;
-  const baseX = side === 'a' ? -1.48 : side === 'b' ? 1.48 : 0;
+  const baseX = side === 'a' ? -1.58 : side === 'b' ? 1.58 : 0;
   const baseRotY = side === 'a' ? Math.PI * 0.42 : side === 'b' ? -Math.PI * 0.42 : -0.42;
+
+  // 初始化时立即设置到各自红蓝角站位，确保后续包围盒计算准确
+  modelGroup.position.x = baseX;
+  if (side !== 'solo') {
+    modelGroup.rotation.y = baseRotY;
+  }
 
   const state = {
     action: 'idle',
@@ -433,26 +439,43 @@ export async function mountAnatomy(root, profile, options = {}) {
     model.updateMatrixWorld(true);
     const modelBox = new THREE.Box3().setFromObject(model);
     const size = modelBox.getSize(new THREE.Vector3());
-    const pedestalRadius = Math.max(1.25, Math.max(size.x, size.z) * .58);
+    const pedestalRadius = Math.max(1.95, Math.max(size.x, size.z) * .96);
     const baseY = modelBox.min.y;
 
-    const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x090605, transparent: true, opacity: .32, depthWrite: false });
-    shadow = new THREE.Mesh(new THREE.CircleGeometry(pedestalRadius * 1.48, 64), shadowMaterial);
+    const shadowMaterial = new THREE.MeshBasicMaterial({ color: 0x090605, transparent: true, opacity: .36, depthWrite: false });
+    shadow = new THREE.Mesh(new THREE.CircleGeometry(pedestalRadius * 1.38, 64), shadowMaterial);
     shadow.rotation.x = -Math.PI / 2;
-    shadow.position.y = baseY - .18;
+    shadow.position.y = baseY - .22;
     scene.add(shadow);
 
-    const pedestalMaterial = new THREE.MeshStandardMaterial({ color: '#e8dcc4', roughness: .52, metalness: .12 });
-    pedestal = new THREE.Mesh(new THREE.CylinderGeometry(pedestalRadius, pedestalRadius * 1.08, .16, 64), pedestalMaterial);
-    pedestal.position.y = baseY - .085;
-    pedestal.receiveShadow = true;
+    pedestal = new THREE.Group();
+    const matTop = new THREE.Mesh(
+      new THREE.CylinderGeometry(pedestalRadius, pedestalRadius * 1.04, .22, 64),
+      new THREE.MeshStandardMaterial({ color: '#eadcc3', roughness: .52, metalness: .12 })
+    );
+    matTop.position.y = baseY - .11;
+    matTop.receiveShadow = true;
+    pedestal.add(matTop);
+
+    const apronBase = new THREE.Mesh(
+      new THREE.CylinderGeometry(pedestalRadius * 1.045, pedestalRadius * 1.09, .34, 64),
+      new THREE.MeshStandardMaterial({ color: '#231711', roughness: .42, metalness: .35 })
+    );
+    apronBase.position.y = baseY - .29;
+    pedestal.add(apronBase);
     scene.add(pedestal);
 
-    const ringMaterial = new THREE.MeshStandardMaterial({ color: '#d4a238', roughness: .28, metalness: .78 });
-    ring = new THREE.Mesh(new THREE.TorusGeometry(pedestalRadius * .965, .028, 12, 64), ringMaterial);
-    ring.rotation.x = Math.PI / 2;
-    ring.position.y = baseY + .005;
-    ring.receiveShadow = true;
+    ring = new THREE.Group();
+    const ringMaterial = new THREE.MeshStandardMaterial({ color: '#d4a238', roughness: .26, metalness: .8 });
+    const outerBrass = new THREE.Mesh(new THREE.TorusGeometry(pedestalRadius * .96, .032, 12, 64), ringMaterial);
+    outerBrass.rotation.x = Math.PI / 2;
+    outerBrass.position.y = baseY + .006;
+    ring.add(outerBrass);
+
+    const innerBrass = new THREE.Mesh(new THREE.TorusGeometry(pedestalRadius * .62, .018, 10, 64), ringMaterial);
+    innerBrass.rotation.x = Math.PI / 2;
+    innerBrass.position.y = baseY + .006;
+    ring.add(innerBrass);
     scene.add(ring);
 
     fitCamera = () => {
@@ -463,16 +486,17 @@ export async function mountAnatomy(root, profile, options = {}) {
       camera.aspect = width / height;
 
       const displayBox = new THREE.Box3().setFromObject(model);
-      displayBox.expandByPoint(new THREE.Vector3(-pedestalRadius, baseY - .2, -pedestalRadius));
-      displayBox.expandByPoint(new THREE.Vector3(pedestalRadius, baseY - .2, pedestalRadius));
+      const fitR = Math.min(pedestalRadius * 0.78, Math.max(1.35, Math.max(size.x, size.z) * 0.68));
+      displayBox.expandByPoint(new THREE.Vector3(-fitR, baseY - .22, -fitR));
+      displayBox.expandByPoint(new THREE.Vector3(fitR, baseY + size.y * 0.08, fitR));
       const sphere = displayBox.getBoundingSphere(new THREE.Sphere());
       const verticalFov = camera.fov * Math.PI / 180;
       const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
       const fitFov = Math.min(verticalFov, horizontalFov);
-      const distance = sphere.radius / Math.sin(fitFov / 2) * 1.02;
-      const direction = new THREE.Vector3(.52, .2, .9).normalize();
+      const distance = sphere.radius / Math.sin(fitFov / 2) * .96;
+      const direction = new THREE.Vector3(.48, .24, .9).normalize();
       camera.position.copy(sphere.center).addScaledVector(direction, distance);
-      camera.lookAt(sphere.center.x, sphere.center.y - sphere.radius * .03, sphere.center.z);
+      camera.lookAt(sphere.center.x, sphere.center.y - sphere.radius * .04, sphere.center.z);
       camera.updateProjectionMatrix();
     };
     fitCamera();
@@ -551,7 +575,7 @@ export async function mountAnatomy(root, profile, options = {}) {
 }
 
 // ==========================================================================
-// 02 · 牛子游乐场中央 3D 拳击擂台：持续循环渲染 + 卡牌出招实时骨骼形变与震屏特效
+// 02 · 牛子游乐场中央 3D 拳击擂台：宽阔八角/方圆大台面 + 骨骼形变 + 爆裂打击特效
 // ==========================================================================
 export async function mountDuel(root, playerA, playerB, options = {}) {
   if (!root) return { dispose() {}, triggerAction() {}, setCombatState() {} };
@@ -567,11 +591,13 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
   let rigB = null;
   let ringArenaGroup = null;
   let shockwave = null;
+  let groundWave = null;
+  let hitSparks = null;
   let observer = null;
   let shakeTime = 0;
   let shakeIntensity = 0;
-  const baseCamPos = { x: 0, y: 1.5, z: 6.5 };
-  const baseLookAt = { x: 0, y: 0.9, z: 0 };
+  const baseCamPos = { x: 0, y: 1.8, z: 6.8 };
+  const baseLookAt = { x: 0, y: 0.85, z: 0 };
 
   const paintFallback = () => {
     root.innerHTML = `<div class="duel-fallback"><div>${anatomySvg(playerA)}</div><span>VS</span><div>${anatomySvg(playerB)}</div></div>`;
@@ -588,6 +614,8 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
       disposeModel(right);
       disposeObject(ringArenaGroup);
       disposeObject(shockwave);
+      disposeObject(groundWave);
+      disposeObject(hitSparks);
       if (renderer) {
         renderer.dispose();
         renderer.forceContextLoss?.();
@@ -608,23 +636,42 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
       actor.trigger(actionName, duration);
 
       if (['jab', 'heavy', 'flurry'].includes(actionName)) {
-        const hitDelay = actionName === 'heavy' ? 360 : 230;
+        const hitDelay = actionName === 'heavy' ? 340 : 210;
         setTimeout(() => {
           if (disposed) return;
           if (!opts.blockedCompletely) {
-            target?.trigger('hit', 620);
+            target?.trigger('hit', 640);
           } else {
-            target?.trigger('guard', 480);
+            target?.trigger('guard', 500);
           }
-          // 激活冲击波光环与镜头震动
+          const nowTs = performance.now();
+          const hitX = side === 'a' ? 0.92 : -0.92;
+          const hitColor = opts.blockedCompletely ? 0x4ecbff : actionName === 'heavy' ? 0xff3b1f : 0xffd43b;
+          // 激活空中冲击波光环、地面震波与爆裂火花
           if (shockwave) {
-            shockwave.position.x = side === 'a' ? 0.85 : -0.85;
-            shockwave.userData.activeStart = performance.now();
-            shockwave.material.color.setHex(actionName === 'heavy' ? 0xff4522 : 0xffd452);
+            shockwave.position.x = hitX;
+            shockwave.userData.activeStart = nowTs;
+            shockwave.material.color.setHex(hitColor);
           }
-          shakeTime = performance.now();
-          shakeIntensity = actionName === 'heavy' ? 0.22 : actionName === 'flurry' ? 0.14 : 0.09;
+          if (groundWave) {
+            groundWave.position.x = side === 'a' ? 1.15 : -1.15;
+            groundWave.userData.activeStart = nowTs;
+            groundWave.material.color.setHex(hitColor);
+          }
+          if (hitSparks) {
+            hitSparks.position.x = hitX;
+            hitSparks.userData.activeStart = nowTs;
+            hitSparks.children.forEach(spark => spark.material.color.setHex(hitColor));
+          }
+          shakeTime = nowTs;
+          shakeIntensity = actionName === 'heavy' ? 0.28 : actionName === 'flurry' ? 0.18 : 0.12;
         }, hitDelay);
+      } else if (actionName === 'guard' || actionName === 'buff') {
+        if (groundWave) {
+          groundWave.position.x = side === 'a' ? -1.58 : 1.58;
+          groundWave.userData.activeStart = performance.now();
+          groundWave.material.color.setHex(actionName === 'guard' ? 0x38bdf8 : 0xfacc15);
+        }
       }
     },
     setCombatState(stateA = {}, stateB = {}) {
@@ -637,12 +684,12 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
     const THREE = await import('/vendor/three.module.js');
     if (disposed || !root.isConnected) return control;
     scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(30, 2, .1, 200);
+    camera = new THREE.PerspectiveCamera(32, 2, .1, 240);
     renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setClearColor(0x000000, 0);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.02;
+    renderer.toneMappingExposure = 1.04;
     renderer.domElement.setAttribute('role', 'img');
     renderer.domElement.setAttribute('aria-label', 'WNC 3D拳击擂台：双方牛子正面对决');
     renderer.domElement.style.position = 'absolute';
@@ -652,15 +699,15 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
     root.innerHTML = '';
     root.append(renderer.domElement);
 
-    scene.add(new THREE.HemisphereLight(0xfff8ea, 0x3b2c22, 2.1));
-    const key = new THREE.DirectionalLight(0xfff1dd, 3.6);
-    key.position.set(0, 9, 6);
+    scene.add(new THREE.HemisphereLight(0xfff8ea, 0x3b2c22, 2.2));
+    const key = new THREE.DirectionalLight(0xfff2de, 3.8);
+    key.position.set(0, 11, 7);
     scene.add(key);
-    const leftLight = new THREE.PointLight(0xff5a4d, 14, 14);
-    leftLight.position.set(-3.8, 3.0, 3.2);
+    const leftLight = new THREE.PointLight(0xff5a4d, 16, 18);
+    leftLight.position.set(-4.5, 3.6, 3.6);
     scene.add(leftLight);
-    const rightLight = new THREE.PointLight(0x529dff, 14, 14);
-    rightLight.position.set(3.8, 3.0, 3.2);
+    const rightLight = new THREE.PointLight(0x529dff, 16, 18);
+    rightLight.position.set(4.5, 3.6, 3.6);
     scene.add(rightLight);
 
     left = buildAnatomyModel(THREE, playerA);
@@ -669,77 +716,154 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
 
     rigA = createAnimatedRig(THREE, left, 'a');
     rigB = createAnimatedRig(THREE, right, 'b');
+    // 立即更新一次矩阵，保证红蓝角初始站位 (-1.58 / +1.58) 生效后再测算擂台尺寸
+    left.updateMatrixWorld(true);
+    right.updateMatrixWorld(true);
 
     const bounds = new THREE.Box3().setFromObject(left).union(new THREE.Box3().setFromObject(right));
     const size = bounds.getSize(new THREE.Vector3());
-    const radius = Math.max(2.35, Math.max(size.x, size.z) * .54);
+    // 大幅扩充竞技台台面半径（横向与纵深均留出充裕的走位与闪避空间）
+    const ringRadius = Math.max(4.6, size.x * 0.88, size.z * 1.45);
+    const scaleX = 1.22;
+    const scaleZ = 0.92;
     const baseY = bounds.min.y;
 
-    // 构建拟物 3D 拳击擂台 (帆布擂台垫 + 裙边 + 四角立柱 + 围绳)
+    // 构建巨型拟物 3D 锦标赛拳击擂台 (宽幅帆布台面 + 红蓝角扇区 + 厚重裙边 + 四角立柱 + 三面围绳)
     ringArenaGroup = new THREE.Group();
-    const matMaterial = new THREE.MeshStandardMaterial({ color: '#e6d8be', roughness: .58, metalness: .1 });
-    const platform = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 1.04, .18, 64), matMaterial);
-    platform.position.y = baseY - .09;
+
+    const floorShadow = new THREE.Mesh(
+      new THREE.CircleGeometry(ringRadius * 1.18, 64),
+      new THREE.MeshBasicMaterial({ color: 0x070504, transparent: true, opacity: 0.42, depthWrite: false })
+    );
+    floorShadow.rotation.x = -Math.PI / 2;
+    floorShadow.scale.set(scaleX, scaleZ, 1);
+    floorShadow.position.y = baseY - 0.52;
+    ringArenaGroup.add(floorShadow);
+
+    const matMaterial = new THREE.MeshStandardMaterial({ color: '#ece0c8', roughness: 0.54, metalness: 0.08 });
+    const platform = new THREE.Mesh(new THREE.CylinderGeometry(ringRadius, ringRadius * 1.03, 0.24, 64), matMaterial);
+    platform.scale.set(scaleX, 1, scaleZ);
+    platform.position.y = baseY - 0.12;
     ringArenaGroup.add(platform);
 
-    const apronMat = new THREE.MeshStandardMaterial({ color: '#241812', roughness: .4, metalness: .35 });
-    const apron = new THREE.Mesh(new THREE.CylinderGeometry(radius * 1.042, radius * 1.06, .28, 64), apronMat);
-    apron.position.y = baseY - .24;
+    // 红蓝角台面战区涂装
+    const redZone = new THREE.Mesh(
+      new THREE.RingGeometry(ringRadius * 0.56, ringRadius * 0.93, 32, 1, Math.PI * 0.62, Math.PI * 0.76),
+      new THREE.MeshBasicMaterial({ color: 0xc42828, transparent: true, opacity: 0.22, side: THREE.DoubleSide })
+    );
+    redZone.rotation.x = -Math.PI / 2;
+    redZone.scale.set(scaleX, scaleZ, 1);
+    redZone.position.y = baseY + 0.004;
+    ringArenaGroup.add(redZone);
+
+    const blueZone = new THREE.Mesh(
+      new THREE.RingGeometry(ringRadius * 0.56, ringRadius * 0.93, 32, 1, -Math.PI * 0.38, Math.PI * 0.76),
+      new THREE.MeshBasicMaterial({ color: 0x1d569e, transparent: true, opacity: 0.22, side: THREE.DoubleSide })
+    );
+    blueZone.rotation.x = -Math.PI / 2;
+    blueZone.scale.set(scaleX, scaleZ, 1);
+    blueZone.position.y = baseY + 0.004;
+    ringArenaGroup.add(blueZone);
+
+    // 厚重皮革擂台围裙 (Apron Skirt) 与黄铜底边
+    const apronMat = new THREE.MeshStandardMaterial({ color: '#211610', roughness: 0.38, metalness: 0.36 });
+    const apron = new THREE.Mesh(new THREE.CylinderGeometry(ringRadius * 1.032, ringRadius * 1.06, 0.42, 64), apronMat);
+    apron.scale.set(scaleX, 1, scaleZ);
+    apron.position.y = baseY - 0.33;
     ringArenaGroup.add(apron);
 
-    const goldRingMat = new THREE.MeshStandardMaterial({ color: '#eab338', roughness: .28, metalness: .78 });
-    const outerRing = new THREE.Mesh(new THREE.TorusGeometry(radius * .96, .026, 10, 64), goldRingMat);
+    const goldRingMat = new THREE.MeshStandardMaterial({ color: '#eab338', roughness: 0.26, metalness: 0.82 });
+    const outerRing = new THREE.Mesh(new THREE.TorusGeometry(ringRadius * 0.96, 0.032, 12, 72), goldRingMat);
     outerRing.rotation.x = Math.PI / 2;
-    outerRing.position.y = baseY + .006;
+    outerRing.scale.set(scaleX, scaleZ, 1);
+    outerRing.position.y = baseY + 0.008;
     ringArenaGroup.add(outerRing);
 
-    const centerLineMat = new THREE.MeshBasicMaterial({ color: '#c42828', transparent: true, opacity: .65 });
-    const line = new THREE.Mesh(new THREE.BoxGeometry(.05, .014, radius * 1.5), centerLineMat);
-    line.position.y = baseY + .006;
+    const innerCombatRing = new THREE.Mesh(new THREE.TorusGeometry(ringRadius * 0.55, 0.022, 10, 64), goldRingMat);
+    innerCombatRing.rotation.x = Math.PI / 2;
+    innerCombatRing.scale.set(scaleX, scaleZ, 1);
+    innerCombatRing.position.y = baseY + 0.007;
+    ringArenaGroup.add(innerCombatRing);
+
+    const centerLineMat = new THREE.MeshBasicMaterial({ color: '#c42828', transparent: true, opacity: 0.68 });
+    const line = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.014, ringRadius * scaleZ * 1.72), centerLineMat);
+    line.position.y = baseY + 0.007;
     ringArenaGroup.add(line);
 
-    // 四个拳台角柱与后方围绳
+    // 四个宽幅拳台角柱（带靠垫 Turnbuckles）与三面围绳（左、后、右）
     const postAngles = [Math.PI * 0.78, Math.PI * 0.22, -Math.PI * 0.78, -Math.PI * 0.22];
     const postColors = ['#c42828', '#1d569e', '#c42828', '#1d569e'];
     const postPositions = [];
     postAngles.forEach((ang, idx) => {
-      const px = Math.cos(ang) * (radius * 0.92);
-      const pz = -Math.sin(ang) * (radius * 0.78);
+      const px = Math.cos(ang) * (ringRadius * scaleX * 0.93);
+      const pz = -Math.sin(ang) * (ringRadius * scaleZ * 0.88);
       postPositions.push(new THREE.Vector3(px, baseY, pz));
-      const post = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.065, 0.075, 1.85, 16),
-        new THREE.MeshStandardMaterial({ color: postColors[idx], roughness: 0.35, metalness: 0.45 })
-      );
-      post.position.set(px, baseY + 0.9, pz);
+      const postMat = new THREE.MeshStandardMaterial({ color: postColors[idx], roughness: 0.32, metalness: 0.48 });
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.095, 2.25, 18), postMat);
+      post.position.set(px, baseY + 1.1, pz);
       ringArenaGroup.add(post);
+
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), goldRingMat);
+      cap.position.set(px, baseY + 2.24, pz);
+      ringArenaGroup.add(cap);
     });
 
-    // 后侧三道围绳 (红、白、蓝)
+    // 后侧与左右两侧三层围绳 (红、金白、蓝)
     const ropeColors = [0xd63030, 0xfaf3e4, 0x2667ba];
-    [0.45, 0.95, 1.45].forEach((ropeH, rIdx) => {
-      const p0 = postPositions[0];
-      const p1 = postPositions[1];
-      const ropeLen = p0.distanceTo(p1);
-      const rope = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.018, 0.018, ropeLen, 8),
-        new THREE.MeshStandardMaterial({ color: ropeColors[rIdx], roughness: 0.5 })
-      );
-      rope.position.set((p0.x + p1.x) / 2, baseY + ropeH, (p0.z + p1.z) / 2);
-      rope.rotation.z = Math.PI / 2;
-      ringArenaGroup.add(rope);
+    const ropePairs = [
+      [postPositions[0], postPositions[1]], // 后方主围绳
+      [postPositions[2], postPositions[0]], // 左侧红角围绳
+      [postPositions[1], postPositions[3]], // 右侧蓝角围绳
+    ];
+    [0.52, 1.12, 1.72].forEach((ropeH, rIdx) => {
+      const rMat = new THREE.MeshStandardMaterial({ color: ropeColors[rIdx], roughness: 0.45 });
+      ropePairs.forEach(([pStart, pEnd]) => {
+        const ropeLen = pStart.distanceTo(pEnd);
+        const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, ropeLen, 8), rMat);
+        rope.position.set((pStart.x + pEnd.x) / 2, baseY + ropeH, (pStart.z + pEnd.z) / 2);
+        const dir = new THREE.Vector3().subVectors(pEnd, pStart).normalize();
+        rope.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        ringArenaGroup.add(rope);
+      });
     });
 
     scene.add(ringArenaGroup);
 
-    // 打击冲击波特效环
+    // 1. 空中打击冲击波特效环
     shockwave = new THREE.Mesh(
-      new THREE.RingGeometry(0.18, 0.34, 32),
+      new THREE.RingGeometry(0.22, 0.42, 36),
       new THREE.MeshBasicMaterial({ color: 0xffd452, side: THREE.DoubleSide, transparent: true, opacity: 0, depthWrite: false })
     );
-    shockwave.position.set(0, baseY + size.y * 0.52, 0.35);
-    shockwave.rotation.y = Math.PI * 0.15;
+    shockwave.position.set(0, baseY + size.y * 0.52, 0.42);
+    shockwave.rotation.y = Math.PI * 0.12;
     shockwave.userData.activeStart = 0;
     scene.add(shockwave);
+
+    // 2. 台面地面震波光环
+    groundWave = new THREE.Mesh(
+      new THREE.RingGeometry(0.35, 0.62, 48),
+      new THREE.MeshBasicMaterial({ color: 0xff4522, side: THREE.DoubleSide, transparent: true, opacity: 0, depthWrite: false })
+    );
+    groundWave.rotation.x = -Math.PI / 2;
+    groundWave.position.set(0, baseY + 0.015, 0);
+    groundWave.userData.activeStart = 0;
+    scene.add(groundWave);
+
+    // 3. 爆裂火花射线组 (Hit Sparks)
+    hitSparks = new THREE.Group();
+    hitSparks.position.set(0, baseY + size.y * 0.52, 0.45);
+    hitSparks.userData.activeStart = 0;
+    for (let i = 0; i < 8; i += 1) {
+      const ang = (i / 8) * Math.PI * 2;
+      const spark = new THREE.Mesh(
+        new THREE.ConeGeometry(0.045, 0.36, 6),
+        new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0, depthWrite: false })
+      );
+      spark.userData.angle = ang;
+      spark.rotation.z = ang - Math.PI / 2;
+      hitSparks.add(spark);
+    }
+    scene.add(hitSparks);
 
     const fit = () => {
       if (!renderer || !camera) return;
@@ -747,19 +871,23 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
       const height = Math.max(1, root.clientHeight);
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
+
+      // 聚焦于红蓝双雄与宽阔的内圈主战台，让大擂台铺满整个下半视窗
       const displayBox = new THREE.Box3().setFromObject(left).union(new THREE.Box3().setFromObject(right));
-      displayBox.expandByPoint(new THREE.Vector3(-radius, baseY - .15, -radius * .8));
-      displayBox.expandByPoint(new THREE.Vector3(radius, baseY + 1.8, radius * .8));
+      const focusX = Math.max(3.25, size.x * 0.62);
+      const focusZ = Math.max(2.2, size.z * 0.75);
+      displayBox.expandByPoint(new THREE.Vector3(-focusX, baseY - 0.32, -focusZ));
+      displayBox.expandByPoint(new THREE.Vector3(focusX, baseY + Math.max(1.85, size.y * 1.08), focusZ));
       const sphere = displayBox.getBoundingSphere(new THREE.Sphere());
       const verticalFov = camera.fov * Math.PI / 180;
       const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
       const fitFov = Math.min(verticalFov, horizontalFov);
-      const distance = sphere.radius / Math.sin(fitFov / 2) * .88;
+      const distance = sphere.radius / Math.sin(fitFov / 2) * 0.84;
       baseCamPos.x = sphere.center.x;
-      baseCamPos.y = sphere.center.y + sphere.radius * 0.18;
+      baseCamPos.y = sphere.center.y + sphere.radius * 0.28;
       baseCamPos.z = sphere.center.z + distance;
       baseLookAt.x = sphere.center.x;
-      baseLookAt.y = sphere.center.y - sphere.radius * 0.04;
+      baseLookAt.y = sphere.center.y - sphere.radius * 0.06;
       baseLookAt.z = sphere.center.z;
       camera.position.set(baseCamPos.x, baseCamPos.y, baseCamPos.z);
       camera.lookAt(baseLookAt.x, baseLookAt.y, baseLookAt.z);
@@ -789,23 +917,55 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
       rigA?.update(now);
       rigB?.update(now);
 
-      // 冲击波扩散动画
+      // 空中冲击波扩散动画
       if (shockwave?.userData.activeStart) {
         const swElapsed = now - shockwave.userData.activeStart;
-        if (swElapsed < 380) {
-          const p = swElapsed / 380;
-          const sc = 0.6 + p * 3.2;
+        if (swElapsed < 400) {
+          const p = swElapsed / 400;
+          const sc = 0.65 + p * 3.6;
           shockwave.scale.set(sc, sc, 1);
-          shockwave.material.opacity = (1 - p) * 0.85;
+          shockwave.material.opacity = (1 - p) * 0.9;
         } else {
           shockwave.material.opacity = 0;
           shockwave.userData.activeStart = 0;
         }
       }
 
+      // 地面震波扩散动画
+      if (groundWave?.userData.activeStart) {
+        const gwElapsed = now - groundWave.userData.activeStart;
+        if (gwElapsed < 480) {
+          const p = gwElapsed / 480;
+          const sc = 0.7 + p * 4.2;
+          groundWave.scale.set(sc, sc, 1);
+          groundWave.material.opacity = (1 - p) * 0.75;
+        } else {
+          groundWave.material.opacity = 0;
+          groundWave.userData.activeStart = 0;
+        }
+      }
+
+      // 爆裂火花飞溅动画
+      if (hitSparks?.userData.activeStart) {
+        const spElapsed = now - hitSparks.userData.activeStart;
+        if (spElapsed < 340) {
+          const p = spElapsed / 340;
+          const dist = 0.18 + p * 0.95;
+          hitSparks.children.forEach(spark => {
+            const ang = spark.userData.angle;
+            spark.position.set(Math.cos(ang) * dist, Math.sin(ang) * dist, 0);
+            spark.scale.set(1 - p * 0.5, 1 + p * 0.8, 1);
+            spark.material.opacity = (1 - p) * 0.95;
+          });
+        } else {
+          hitSparks.children.forEach(spark => { spark.material.opacity = 0; });
+          hitSparks.userData.activeStart = 0;
+        }
+      }
+
       // 镜头受击震屏
-      if (shakeTime > 0 && now - shakeTime < 260) {
-        const decay = 1 - (now - shakeTime) / 260;
+      if (shakeTime > 0 && now - shakeTime < 280) {
+        const decay = 1 - (now - shakeTime) / 280;
         const sx = (Math.random() - 0.5) * shakeIntensity * decay;
         const sy = (Math.random() - 0.5) * shakeIntensity * decay;
         camera.position.set(baseCamPos.x + sx, baseCamPos.y + sy, baseCamPos.z);
@@ -827,6 +987,8 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
     disposeModel(right);
     disposeObject(ringArenaGroup);
     disposeObject(shockwave);
+    disposeObject(groundWave);
+    disposeObject(hitSparks);
     if (renderer) {
       renderer.dispose();
       renderer.forceContextLoss?.();

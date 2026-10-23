@@ -106,20 +106,48 @@ function toast(message, isError = false) {
   toastTimer = setTimeout(() => { element.className = 'toast'; }, 4200);
 }
 
-function spawnFloater(side, text, tone = 'damage') {
-  const id = `${Date.now()}-${Math.random()}`;
-  state.floaters.push({ id, side, text, tone });
-  const container = $('#combat-floaters');
-  if (container) {
+let floaterSeq = 0;
+function spawnFloater(side, text, tone = 'damage', delayMs = 30) {
+  const seq = ++floaterSeq;
+  const jitterX = ((seq * 37) % 56) - 28;
+  const jitterY = ((seq * 23) % 34) - 17;
+  setTimeout(() => {
+    const container = $('#combat-floaters');
+    if (!container) return;
     const el = document.createElement('div');
     el.className = `combat-floater side-${side} tone-${tone}`;
+    el.style.setProperty('--fx', `${jitterX}px`);
+    el.style.setProperty('--fy', `${jitterY}px`);
     el.textContent = text;
     container.appendChild(el);
-    setTimeout(() => el.remove(), 950);
-  }
+    setTimeout(() => el.remove(), 1150);
+  }, Math.max(16, delayMs));
+}
+
+function triggerStageImpact(targetSide = 'b', intensity = 'normal', delayMs = 180) {
+  if (prefersReducedMotion()) return;
   setTimeout(() => {
-    state.floaters = state.floaters.filter(f => f.id !== id);
-  }, 950);
+    const stage = $('.center-ring-stage');
+    const flash = $('#stage-impact-flash');
+    const hud = $(`[data-hud-side="${targetSide}"]`);
+    const shakeClass = intensity === 'heavy' ? 'stage-shake-heavy' : intensity === 'light' ? 'stage-shake-light' : 'stage-shake-normal';
+    if (stage) {
+      stage.classList.remove('stage-shake-light', 'stage-shake-normal', 'stage-shake-heavy');
+      void stage.offsetWidth;
+      stage.classList.add(shakeClass);
+      setTimeout(() => stage.classList.remove(shakeClass), 420);
+    }
+    if (flash) {
+      flash.className = `stage-impact-flash active flash-${targetSide} flash-${intensity}`;
+      setTimeout(() => { flash.className = 'stage-impact-flash'; }, 360);
+    }
+    if (hud && (intensity === 'normal' || intensity === 'heavy')) {
+      hud.classList.remove('hud-hit-jolt');
+      void hud.offsetWidth;
+      hud.classList.add('hud-hit-jolt');
+      setTimeout(() => hud.classList.remove('hud-hit-jolt'), 420);
+    }
+  }, Math.max(0, delayMs));
 }
 
 const pendingMutations = new Map();
@@ -337,7 +365,7 @@ function startCardCombat(kind = 'pve') {
   }, 80);
 }
 
-function applyDamageToTarget(attacker, defender, rawDamage, defenderSide, ignoreBlock = false) {
+function applyDamageToTarget(attacker, defender, rawDamage, defenderSide, ignoreBlock = false, delayMs = 190) {
   let dmg = Math.max(0, Math.round(rawDamage));
   let blocked = 0;
   if (!ignoreBlock && defender.block > 0) {
@@ -347,9 +375,12 @@ function applyDamageToTarget(attacker, defender, rawDamage, defenderSide, ignore
   }
   if (dmg > 0) {
     defender.hp = Math.max(0, defender.hp - dmg);
-    spawnFloater(defenderSide, `-${dmg} 💥`, 'damage');
+    const isHeavy = dmg >= 15;
+    spawnFloater(defenderSide, `-${dmg} ${isHeavy ? '💥暴击' : '💥'}`, isHeavy ? 'crit' : 'damage', delayMs);
+    triggerStageImpact(defenderSide, isHeavy ? 'heavy' : 'normal', delayMs);
   } else if (blocked > 0) {
-    spawnFloater(defenderSide, `格挡 ${blocked} 🛡️`, 'block');
+    spawnFloater(defenderSide, `🛡️ 格挡 ${blocked}`, 'block', delayMs);
+    triggerStageImpact(defenderSide, 'light', delayMs);
   }
 
   // 荆棘倒刺反伤
@@ -357,7 +388,7 @@ function applyDamageToTarget(attacker, defender, rawDamage, defenderSide, ignore
     const thornDmg = defender.thorns;
     attacker.hp = Math.max(1, attacker.hp - thornDmg);
     const attackerSide = defenderSide === 'b' ? 'a' : 'b';
-    spawnFloater(attackerSide, `倒刺 -${thornDmg} 🌵`, 'damage');
+    spawnFloater(attackerSide, `🌵 倒刺 -${thornDmg}`, 'damage', delayMs + 140);
   }
   return { hpDamage: dmg, blocked };
 }
@@ -436,35 +467,36 @@ async function playHandCard(uid) {
   });
 
   const logs = [`你打出【${tpl.name}】`];
+  const baseHitDelay = tpl.anim === 'heavy' ? 280 : 180;
 
   if (tpl.selfDamage) {
     c.fighter.hp = Math.max(1, c.fighter.hp - tpl.selfDamage);
-    spawnFloater('a', `反震 -${tpl.selfDamage}`, 'damage');
+    spawnFloater('a', `⚡ 反震 -${tpl.selfDamage}`, 'damage', 90);
   }
 
   if (tpl.stealBlock && c.enemy.block > 0) {
     c.enemy.block = 0;
-    spawnFloater('b', '护盾击碎 💥', 'damage');
+    spawnFloater('b', '💥 护盾粉碎！', 'crit', baseHitDelay - 40);
   }
 
   let totalDealt = 0;
   if (damage > 0) {
     for (let h = 0; h < hits; h += 1) {
-      const outcome = applyDamageToTarget(c.fighter, c.enemy, damage, 'b', tpl.ignoreBlock);
+      const outcome = applyDamageToTarget(c.fighter, c.enemy, damage, 'b', tpl.ignoreBlock, baseHitDelay + h * 150);
       totalDealt += outcome.hpDamage;
     }
-    logs.push(`造成 ${damage * hits} 点打击`);
+    logs.push(`造成 ${hits > 1 ? `${damage}×${hits}=${damage * hits}` : damage} 点打击`);
   }
 
   if (tpl.lifesteal && totalDealt > 0) {
     const healed = Math.max(1, Math.round(totalDealt * tpl.lifesteal));
     c.fighter.hp = Math.min(c.fighter.maxHp, c.fighter.hp + healed);
-    spawnFloater('a', `虹吸 +${healed} ❤️`, 'heal');
+    spawnFloater('a', `❤️ 虹吸 +${healed}`, 'heal', baseHitDelay + 140);
   }
 
   if (block > 0) {
     c.fighter.block += block;
-    spawnFloater('a', `+${block} 🛡️`, 'block');
+    spawnFloater('a', `🛡️ 护盾 +${block}`, 'block', 80);
     logs.push(`获得 ${block} 护盾`);
   }
 
@@ -474,38 +506,39 @@ async function playHandCard(uid) {
 
   if (tpl.heal) {
     c.fighter.hp = Math.min(c.fighter.maxHp, c.fighter.hp + tpl.heal);
-    spawnFloater('a', `+${tpl.heal} ❤️`, 'heal');
+    spawnFloater('a', `❤️ 恢复 +${tpl.heal}`, 'heal', 110);
     logs.push(`恢复 ${tpl.heal} HP`);
   }
 
   if (tpl.energyGain) {
     c.fighter.energy += tpl.energyGain;
-    spawnFloater('a', `+${tpl.energyGain} ⚡`, 'buff');
+    spawnFloater('a', `⚡ 精力 +${tpl.energyGain}`, 'buff', 130);
   }
 
   if (tpl.strength) {
     c.fighter.strength += tpl.strength;
-    spawnFloater('a', `刚猛 +${tpl.strength} 💪`, 'buff');
+    spawnFloater('a', `💪 刚猛 +${tpl.strength}`, 'buff', 160);
     logs.push(`刚猛 +${tpl.strength}`);
   }
 
   if (tpl.thorns) {
     c.fighter.thorns += tpl.thorns;
-    spawnFloater('a', `倒刺 +${tpl.thorns} 🌵`, 'buff');
+    spawnFloater('a', `🌵 倒刺 +${tpl.thorns}`, 'buff', 190);
   }
 
   if (tpl.vulnerable) {
     c.enemy.vulnerable += tpl.vulnerable;
-    spawnFloater('b', `破绽 +${tpl.vulnerable} 💔`, 'debuff');
+    spawnFloater('b', `💔 破绽 +${tpl.vulnerable}`, 'debuff', baseHitDelay + 90);
   }
 
   if (tpl.weak) {
     c.enemy.weak += tpl.weak;
-    spawnFloater('b', `萎靡 +${tpl.weak} 🥀`, 'debuff');
+    spawnFloater('b', `🥀 萎靡 +${tpl.weak}`, 'debuff', baseHitDelay + 120);
   }
 
   if (tpl.draw) {
     drawCards(c, tpl.draw);
+    spawnFloater('a', `🎴 抽牌 +${tpl.draw}`, 'buff', 150);
   }
 
   c.log = `${logs.join('，')}！`;
@@ -537,7 +570,7 @@ async function endPlayerTurn() {
     blockedCompletely: intent.damage > 0 && c.fighter.block >= (intent.damage + c.enemy.strength) * (intent.hits || 1),
   });
 
-  await new Promise(resolve => setTimeout(resolve, 680));
+  await new Promise(resolve => setTimeout(resolve, 480));
   if (state.combat !== c) return;
 
   if (intent.damage) {
@@ -547,23 +580,23 @@ async function endPlayerTurn() {
     if (c.fighter.vulnerable > 0) perHit = Math.floor(perHit * 1.5);
     perHit = Math.max(1, perHit);
     for (let i = 0; i < hits; i += 1) {
-      applyDamageToTarget(c.enemy, c.fighter, perHit, 'a', false);
+      applyDamageToTarget(c.enemy, c.fighter, perHit, 'a', false, 40 + i * 160);
     }
   }
 
   if (intent.block) {
     c.enemy.block += intent.block;
-    spawnFloater('b', `+${intent.block} 🛡️`, 'block');
+    spawnFloater('b', `🛡️ 护盾 +${intent.block}`, 'block', 60);
   }
 
   if (intent.strength) {
     c.enemy.strength += intent.strength;
-    spawnFloater('b', `刚猛 +${intent.strength} 💪`, 'buff');
+    spawnFloater('b', `💪 刚猛 +${intent.strength}`, 'buff', 90);
   }
 
   if (intent.vulnerable) {
     c.fighter.vulnerable += intent.vulnerable;
-    spawnFloater('a', `破绽 +${intent.vulnerable} 💔`, 'debuff');
+    spawnFloater('a', `💔 破绽 +${intent.vulnerable}`, 'debuff', 130);
   }
 
   sync3DCombatPostures();
@@ -644,16 +677,79 @@ function opponentRows() {
 function renderStatusPills(combatant) {
   const pills = [];
   if (combatant.block > 0) pills.push(`<span class="status-pill block">🛡️ 护盾 ${combatant.block}</span>`);
-  if (combatant.strength > 0) pills.push(`<span class="status-pill buff">💪 刚猛 +${combatant.strength}</span>`);
-  if (combatant.thorns > 0) pills.push(`<span class="status-pill buff">🌵 倒刺 ${combatant.thorns}</span>`);
-  if (combatant.vulnerable > 0) pills.push(`<span class="status-pill debuff">💔 破绽 ${combatant.vulnerable}</span>`);
-  if (combatant.weak > 0) pills.push(`<span class="status-pill debuff">🥀 萎靡 ${combatant.weak}</span>`);
-  return pills.length ? `<div class="combat-statuses">${pills.join('')}</div>` : '';
+  if (combatant.strength > 0) pills.push(`<span class="status-pill buff">💪 刚猛 +${combatant.strength} (伤+${combatant.strength})</span>`);
+  if (combatant.thorns > 0) pills.push(`<span class="status-pill buff">🌵 倒刺 ${combatant.thorns} (反伤${combatant.thorns})</span>`);
+  if (combatant.vulnerable > 0) pills.push(`<span class="status-pill debuff">💔 破绽 ${combatant.vulnerable}回合 (受击+50%)</span>`);
+  if (combatant.weak > 0) pills.push(`<span class="status-pill debuff">🥀 萎靡 ${combatant.weak}回合 (攻击-25%)</span>`);
+  if (!pills.length) pills.push('<span class="status-pill muted-pill">● 状态平稳 · 无增减益</span>');
+  return `<div class="combat-statuses">${pills.join('')}</div>`;
+}
+
+function renderCardNumChips(cardId, fighter, enemy) {
+  const { damage, block, hits, tpl } = evaluateCardNumbers(cardId, fighter, enemy);
+  if (!tpl) return '';
+  const chips = [];
+  if (damage > 0) {
+    const baseRaw = tpl.baseDamage || 0;
+    const isBoosted = damage > baseRaw;
+    chips.push(`<span class="sts-num-chip dmg${isBoosted ? ' boosted' : ''}">⚔️ ${hits > 1 ? `${damage}×${hits}=${damage * hits}` : `${damage} 伤`}</span>`);
+  }
+  if (block > 0) {
+    const isBoosted = block > (tpl.baseBlock || 0);
+    chips.push(`<span class="sts-num-chip blk${isBoosted ? ' boosted' : ''}">🛡️ +${block} 盾</span>`);
+  }
+  if (tpl.strength) chips.push(`<span class="sts-num-chip buf">💪 刚猛+${tpl.strength}</span>`);
+  if (tpl.thorns) chips.push(`<span class="sts-num-chip buf">🌵 倒刺+${tpl.thorns}</span>`);
+  if (tpl.vulnerable) chips.push(`<span class="sts-num-chip deb">💔 破绽+${tpl.vulnerable}</span>`);
+  if (tpl.weak) chips.push(`<span class="sts-num-chip deb">🥀 萎靡+${tpl.weak}</span>`);
+  if (tpl.heal) chips.push(`<span class="sts-num-chip hel">❤️ +${tpl.heal} HP</span>`);
+  if (tpl.energyGain) chips.push(`<span class="sts-num-chip nrg">⚡ +${tpl.energyGain} 精力</span>`);
+  if (tpl.draw) chips.push(`<span class="sts-num-chip drw">🎴 抽+${tpl.draw}</span>`);
+  return chips.length ? `<div class="sts-num-chips">${chips.join('')}</div>` : '';
+}
+
+function computeEnemyIntentBanner(enemy, fighter) {
+  const intent = enemy?.intent;
+  if (!intent) return { badgeClass: 'intent-jab', mainText: '⚔️ 意图：伺机待发', subText: '准备出招' };
+  const parts = [];
+  let totalIncoming = 0;
+  if (intent.damage) {
+    const hits = intent.hits || 1;
+    let perHit = intent.damage + (enemy.strength || 0);
+    if (enemy.weak > 0) perHit = Math.floor(perHit * 0.75);
+    if (fighter?.vulnerable > 0) perHit = Math.floor(perHit * 1.5);
+    perHit = Math.max(1, perHit);
+    totalIncoming = perHit * hits;
+    parts.push(hits > 1 ? `伤害 ${perHit}×${hits} = ${totalIncoming}` : `伤害 ${totalIncoming}`);
+  }
+  if (intent.block) parts.push(`护盾 +${intent.block}`);
+  if (intent.strength) parts.push(`刚猛 +${intent.strength}`);
+  if (intent.vulnerable) parts.push(`施加破绽 ${intent.vulnerable}`);
+
+  let blockNote = '';
+  if (totalIncoming > 0 && fighter) {
+    const curBlock = fighter.block || 0;
+    const netDmg = Math.max(0, totalIncoming - curBlock);
+    blockNote = curBlock >= totalIncoming
+      ? `✅ 当前护盾(${curBlock})已全额防住`
+      : curBlock > 0
+      ? `⚠️ 护盾抵消后仍受 ${netDmg} 点净伤`
+      : `❗ 预计直击扣除 ${totalIncoming} HP`;
+  } else {
+    blockNote = intent.title || '敌方回合行动';
+  }
+
+  const badgeClass = intent.anim === 'heavy' ? 'intent-heavy' : intent.anim === 'guard' ? 'intent-defend' : intent.anim === 'buff' ? 'intent-buff' : 'intent-jab';
+  return {
+    badgeClass,
+    mainText: `${intent.icon || '⚔️'} ${intent.title}：${parts.join(' · ')}`,
+    subText: blockNote,
+  };
 }
 
 function renderCombatHand(combat) {
   if (!combat.hand.length) {
-    return '<div class="empty-hand-note">本回合手牌已出完，请点击右侧【🔔 敲钟结束回合】！</div>';
+    return '<div class="empty-hand-note">本回合手牌已全部打出，请点击右侧【🔔 敲钟结束回合】迎接对手出招！</div>';
   }
   return combat.hand.map((entry, idx) => {
     const { desc, tpl } = evaluateCardNumbers(entry.cardId, combat.fighter, combat.enemy);
@@ -661,19 +757,49 @@ function renderCombatHand(combat) {
     const canPlay = combat.status === 'active' && combat.fighter.energy >= tpl.cost;
     const typeInfo = CARD_TYPES[tpl.type] || CARD_TYPES.attack;
     const offset = idx - (combat.hand.length - 1) / 2;
-    const rot = (offset * 3.2).toFixed(1);
-    const lift = (Math.abs(offset) * 4).toFixed(1);
-    return `<button class="sts-card type-${tpl.type}${canPlay ? ' playable' : ' unplayable'}" style="--card-rot:${rot}deg;--card-drop:${lift}px" data-action="play-card" data-uid="${escapeHtml(entry.uid)}"${disabled(!canPlay)}><div class="sts-card-top"><span class="sts-cost">${tpl.cost}</span><span class="sts-type-tag">${typeInfo.badge}</span></div><div class="sts-card-art"><span class="sts-anim-tag">${tpl.anim === 'heavy' ? '🔨 重劈' : tpl.anim === 'flurry' ? '🌪️ 连抽' : tpl.anim === 'guard' ? '🛡️ 硬化' : tpl.anim === 'buff' ? '🔥 脉动' : '🥊 寸劲'}</span></div><strong class="sts-card-title">${escapeHtml(tpl.name)}</strong><p class="sts-card-desc">${escapeHtml(desc)}</p></button>`;
+    const rot = (offset * 2.6).toFixed(1);
+    const lift = (Math.abs(offset) * 3.5).toFixed(1);
+    return `<button class="sts-card type-${tpl.type} rarity-${tpl.rarity || 'common'}${canPlay ? ' playable' : ' unplayable'}" style="--card-rot:${rot}deg;--card-drop:${lift}px" data-action="play-card" data-uid="${escapeHtml(entry.uid)}"${disabled(!canPlay)}><div class="sts-card-top"><span class="sts-cost">${tpl.cost}</span><span class="sts-type-tag">${typeInfo.badge}</span></div><div class="sts-card-art"><span class="sts-anim-tag">${tpl.anim === 'heavy' ? '🔨 重劈暴击' : tpl.anim === 'flurry' ? '🌪️ 多段连抽' : tpl.anim === 'guard' ? '🛡️ 硬化固守' : tpl.anim === 'buff' ? '🔥 充血脉动' : '🥊 寸劲刺击'}</span></div><strong class="sts-card-title">${escapeHtml(tpl.name)}</strong>${renderCardNumChips(entry.cardId, combat.fighter, combat.enemy)}<p class="sts-card-desc">${escapeHtml(desc)}</p></button>`;
   }).join('');
 }
 
 function renderCombatOutcomeDeck(combat) {
   const isWin = combat.status === 'victory';
-  return `<div class="combat-outcome-panel"><div class="outcome-header"><span class="pill dark">${isWin ? '🏆 KO 获胜 · 尺寸已掠夺' : '💀 战败倒地'}</span><h3>${escapeHtml(combat.log)}</h3></div>${isWin && combat.rewardChoices.length && !combat.rewardPicked ? `<div class="roguelike-draft-box"><div class="draft-title"><span>🎁 肉鸽战利品三选一：挑 1 张强力新卡永久加入你的连胜牌组（当前牌组 ${buildPlayerDeck(state.player, state.draftedCards).length} 张）</span><button class="button text small" data-action="skip-reward">跳过选牌</button></div><div class="draft-cards-row">${combat.rewardChoices.map(cardId => {
+  const battle = combat.serverSettlement;
+  let ledgerHtml = '';
+  if (battle?.playerA && battle?.result?.after?.a) {
+    const before = battle.playerA;
+    const after = battle.result.after.a;
+    const volBefore = volume(before);
+    const volAfter = volume(after);
+    const dLen = Number(after.length) - Number(before.length);
+    const dDia = Number(after.diameter) - Number(before.diameter);
+    const dVol = volAfter - volBefore;
+    const fmtDelta = (val, unit) => `<span class="${val >= 0 ? 'delta-positive' : 'delta-negative'}">${val >= 0 ? '+' : ''}${number(val)} ${unit}</span>`;
+    ledgerHtml = `
+      <div class="plunder-ledger">
+        <div class="plunder-cell">
+          <span class="stat-label">📏 长度变化 · LENGTH</span>
+          <strong>${number(before.length)} → ${number(after.length)} <small>cm</small></strong>
+          ${fmtDelta(dLen, 'cm')}
+        </div>
+        <div class="plunder-cell">
+          <span class="stat-label">⚙️ 直径变化 · CALIBER</span>
+          <strong>${number(before.diameter)} → ${number(after.diameter)} <small>cm</small></strong>
+          ${fmtDelta(dDia, 'cm')}
+        </div>
+        <div class="plunder-cell">
+          <span class="stat-label">📦 总体积变化 · VOLUME</span>
+          <strong>${number(volBefore, 1)} → ${number(volAfter, 1)} <small>cm³</small></strong>
+          ${fmtDelta(dVol, 'cm³')}
+        </div>
+      </div>`;
+  }
+  return `<div class="combat-outcome-panel"><div class="outcome-header"><span class="pill dark">${isWin ? '🏆 KO 获胜 · 真实尺寸已掠夺' : '💀 战败倒地 · 尺寸受损'}</span><h3>${escapeHtml(combat.log)}</h3></div>${ledgerHtml}${isWin && combat.rewardChoices.length && !combat.rewardPicked ? `<div class="roguelike-draft-box"><div class="draft-header"><strong>🎁 肉鸽战利品三选一</strong><span>挑 1 张强力新卡永久加入你的连胜牌组（当前牌组 ${buildPlayerDeck(state.player, state.draftedCards).length} 张）</span><button class="button text small" data-action="skip-reward">跳过选牌</button></div><div class="draft-cards-row">${combat.rewardChoices.map(cardId => {
     const { desc, tpl } = evaluateCardNumbers(cardId, combat.fighter, combat.enemy);
     if (!tpl) return '';
     const typeInfo = CARD_TYPES[tpl.type] || CARD_TYPES.attack;
-    return `<button class="sts-card draft-card type-${tpl.type} playable" data-action="pick-reward" data-card="${escapeHtml(cardId)}"><div class="sts-card-top"><span class="sts-cost">${tpl.cost}</span><span class="sts-type-tag">${typeInfo.badge}</span></div><strong class="sts-card-title">${escapeHtml(tpl.name)}</strong><p class="sts-card-desc">${escapeHtml(desc)}</p><span class="draft-pick-cta">➕ 收入囊中</span></button>`;
+    return `<button class="sts-card draft-card type-${tpl.type} rarity-${tpl.rarity || 'common'} playable" data-action="pick-reward" data-card="${escapeHtml(cardId)}"><div class="sts-card-top"><span class="sts-cost">${tpl.cost}</span><span class="sts-type-tag">${typeInfo.badge}</span></div><strong class="sts-card-title">${escapeHtml(tpl.name)}</strong>${renderCardNumChips(cardId, combat.fighter, combat.enemy)}<p class="sts-card-desc">${escapeHtml(desc)}</p><span class="draft-pick-cta">➕ 收入牌组</span></button>`;
   }).join('')}</div></div>` : ''}<div class="outcome-actions"><button class="button acid" data-action="start-pve-combat">${icon('dice')}继续下一场 PVE 肉鸽擂台</button>${state.opponentId ? `<button class="button" data-action="start-pvp-combat">${icon('play')}再战该 PVP 对手</button>` : ''}<button class="button outline" data-action="exit-combat">返回赛场选人台</button></div></div>`;
 }
 
@@ -682,25 +808,35 @@ function renderArena() {
   const playerA = state.player || { username: '待命红角拳手', length: 12, diameter: 3.5, colors: DEFAULT_COLORS };
   const playerB = getActiveArenaOpponent();
   const c = state.combat;
-  const fStats = c ? c.fighter : { ...deriveCombatStats(playerA), hp: deriveCombatStats(playerA).maxHp, maxHp: deriveCombatStats(playerA).maxHp, block: 0, strength: 0, thorns: 0, vulnerable: 0, weak: 0 };
-  const eStats = c ? c.enemy : { ...deriveCombatStats(playerB), hp: deriveCombatStats(playerB).maxHp, maxHp: deriveCombatStats(playerB).maxHp, block: 0, strength: 0, thorns: 0, vulnerable: 0, weak: 0, intent: rollEnemyIntent({ stats: deriveCombatStats(playerB), strength: 0 }, 1) };
+  const derivedA = deriveCombatStats(playerA);
+  const derivedB = deriveCombatStats(playerB);
+  const fStats = c ? c.fighter : { stats: derivedA, hp: derivedA.maxHp, maxHp: derivedA.maxHp, block: 0, strength: 0, thorns: 0, vulnerable: 0, weak: 0 };
+  const eStats = c ? c.enemy : { stats: derivedB, hp: derivedB.maxHp, maxHp: derivedB.maxHp, block: 0, strength: 0, thorns: 0, vulnerable: 0, weak: 0, intent: rollEnemyIntent({ stats: derivedB, strength: 0 }, 1) };
   const hpPctA = Math.max(0, Math.min(100, Math.round((fStats.hp / fStats.maxHp) * 100)));
   const hpPctB = Math.max(0, Math.min(100, Math.round((eStats.hp / eStats.maxHp) * 100)));
   const deckSize = state.player ? buildPlayerDeck(state.player, state.draftedCards).length : 10;
+  const intentView = computeEnemyIntentBanner(eStats, fStats);
 
-  return `${pageHeader('牛子游乐场', '中央 3D 拳击擂台 · 杀戮尖塔式回合制卡牌出招 + 肉鸽牌组构筑', '02')}
+  return `${pageHeader('牛子游乐场', '中央 3D 宽幅八角擂台 · 杀戮尖塔式回合制卡牌出招 + 肉鸽牌组构筑', '02')}
   <section class="card arena-centerpiece-card" id="battle-result">
-    <!-- 顶部大屏记分牌与红蓝角血条/意图 HUD -->
+    <!-- 顶部大屏记分牌与红蓝角血条/三维战斗转化数值/意图 HUD -->
     <div class="ring-scoreboard-hud">
-      <div class="fighter-hud corner-red-hud">
+      <div class="fighter-hud corner-red-hud" data-hud-side="a">
         <div class="hud-top">
           <span class="corner-pill red">红角 · 挑战方</span>
           <strong class="hud-name">${escapeHtml(playerA.username)}</strong>
-          <span class="hud-dims">长 ${number(playerA.length)} · 径 ${number(playerA.diameter)} · ${number(volume(playerA), 1)} cm³</span>
+          <span class="hud-dims">📦 ${number(volume(playerA), 1)} cm³</span>
         </div>
-        <div class="hp-bar-track" role="progressbar" aria-valuenow="${fStats.hp}" aria-valuemin="0" aria-valuemax="${fStats.maxHp}">
-          <div class="hp-bar-fill red" style="width:${hpPctA}%"></div>
-          <span class="hp-bar-label">❤️ 充血度 ${fStats.hp} / ${fStats.maxHp}</span>
+        <div class="hp-bar-wrap">
+          <div class="hp-bar-track" role="progressbar" aria-valuenow="${fStats.hp}" aria-valuemin="0" aria-valuemax="${fStats.maxHp}">
+            <div class="hp-bar-fill red" style="width:${hpPctA}%"></div>
+            <span class="hp-bar-label">❤️ 充血值 ${fStats.hp} / ${fStats.maxHp} (${hpPctA}%)</span>
+          </div>
+          ${fStats.block > 0 ? `<span class="block-shield" title="当前回合护盾值">🛡️ ${fStats.block}</span>` : ''}
+        </div>
+        <div class="hud-stat-chips">
+          <span class="hud-chip" title="长度提升刺击与连抽卡牌伤害">📏 长 ${number(playerA.length)}cm <em>刺击+${fStats.stats.jabBonus}</em></span>
+          <span class="hud-chip" title="直径提升重劈伤害与硬化护盾加成">⚙️ 径 ${number(playerA.diameter)}cm <em>重击+${fStats.stats.heavyBonus}/盾+${fStats.stats.guardBonus}</em></span>
         </div>
         ${renderStatusPills(fStats)}
       </div>
@@ -714,95 +850,112 @@ function renderArena() {
         </div>
       </div>
 
-      <div class="fighter-hud corner-blue-hud">
+      <div class="fighter-hud corner-blue-hud" data-hud-side="b">
         <div class="hud-top">
-          <span class="hud-dims">${number(volume(playerB), 1)} cm³ · 长 ${number(playerB.length)} · 径 ${number(playerB.diameter)}</span>
+          <span class="hud-dims">📦 ${number(volume(playerB), 1)} cm³</span>
           <strong class="hud-name">${escapeHtml(playerB.username)}</strong>
           <span class="corner-pill blue">蓝角 · 迎战方</span>
         </div>
-        <div class="hp-bar-track" role="progressbar" aria-valuenow="${eStats.hp}" aria-valuemin="0" aria-valuemax="${eStats.maxHp}">
-          <div class="hp-bar-fill blue" style="width:${hpPctB}%"></div>
-          <span class="hp-bar-label">❤️ 充血度 ${eStats.hp} / ${eStats.maxHp}</span>
+        <div class="hp-bar-wrap">
+          ${eStats.block > 0 ? `<span class="block-shield" title="对手当前护盾值">🛡️ ${eStats.block}</span>` : ''}
+          <div class="hp-bar-track" role="progressbar" aria-valuenow="${eStats.hp}" aria-valuemin="0" aria-valuemax="${eStats.maxHp}">
+            <div class="hp-bar-fill blue" style="width:${hpPctB}%"></div>
+            <span class="hp-bar-label">❤️ 充血值 ${eStats.hp} / ${eStats.maxHp} (${hpPctB}%)</span>
+          </div>
+        </div>
+        <div class="hud-stat-chips right">
+          <span class="hud-chip">📏 长 ${number(playerB.length)}cm <em>刺击+${eStats.stats.jabBonus}</em></span>
+          <span class="hud-chip">⚙️ 径 ${number(playerB.diameter)}cm <em>重击+${eStats.stats.heavyBonus}/盾+${eStats.stats.guardBonus}</em></span>
         </div>
         <div class="enemy-intent-row">
-          <span class="intent-badge" title="对手下回合行动预告">${eStats.intent?.icon || '⚔️'} ${escapeHtml(eStats.intent?.summary || '意图：伺机待发')}</span>
+          <span class="intent-badge ${intentView.badgeClass}" title="对手下回合行动与预计精确数值">${escapeHtml(intentView.mainText)}</span>
+          <span class="intent-desc">${escapeHtml(intentView.subText)}</span>
         </div>
         ${renderStatusPills(eStats)}
       </div>
     </div>
 
-    <!-- 视觉中心：3D 拳击大擂台 -->
+    <!-- 视觉中心：3D 宽幅八角拳击大擂台 -->
     <div class="center-ring-stage">
       <div class="ring-ropes" aria-hidden="true"><span></span><span></span><span></span></div>
       <div class="corner-buckle red" aria-hidden="true">RED · ${escapeHtml(playerA.username)}</div>
       <div class="corner-buckle blue" aria-hidden="true">BLUE · ${escapeHtml(playerB.username)}</div>
+      <div id="stage-impact-flash" class="stage-impact-flash" aria-hidden="true"></div>
       <div id="combat-floaters" class="combat-floaters" aria-live="polite"></div>
       <div class="battle-arena main-ring-viewport" data-battle-stage aria-label="WNC 3D拳击擂台：双方牛子正面对决"></div>
-      <div class="ring-log-banner" id="combat-log-banner">${escapeHtml(c ? c.log : (needsPlayer ? '请先前往【牛子身份证】注册你的牛子，即可登台出牌对决！' : '擂台就绪！点击下方【开始 PVE 肉鸽闯关】或选择【PVP 玩家对手】敲钟开战，也可点击动作按钮热身！'))}</div>
+      <div class="ring-log-banner" id="combat-log-banner">${escapeHtml(c ? c.log : (needsPlayer ? '请先前往【牛子身份证】注册你的牛子，即可登台出牌对决！' : '擂台就绪！点击下方【开始 PVE 肉鸽闯关】或选择【PVP 玩家对手】敲钟开战，也可点击动作按钮测试打击特效！'))}</div>
     </div>
 
     <!-- 擂台下方交互区：战斗中显示杀戮尖塔式手牌扇形区，待命时显示选人与特训控台 -->
     ${c ? (c.status === 'victory' || c.status === 'defeat' ? renderCombatOutcomeDeck(c) : `
       <div class="sts-combat-console">
-        <div class="sts-side-cluster left">
-          <div class="energy-orb" aria-label="当前精力">
-            <strong>${c.fighter.energy}<small>/${c.fighter.maxEnergy}</small></strong>
-            <span>⚡ 精力</span>
+        <div class="sts-console-bar">
+          <div class="energy-and-piles">
+            <div class="energy-orb" aria-label="当前精力">
+              <strong>${c.fighter.energy}<small>/${c.fighter.maxEnergy}</small></strong>
+              <span>⚡ 回合精力</span>
+            </div>
+            <button class="pile-badge clickable" data-action="deck-modal" title="点击查看完整牌组">
+              🎴 抽牌堆 <strong>${c.drawPile.length}</strong> 张
+            </button>
+            <span class="pile-badge">
+              📥 弃牌堆 <strong>${c.discardPile.length}</strong> 张
+            </span>
+            ${c.exhaustPile.length ? `<span class="pile-badge">🔥 已消耗 <strong>${c.exhaustPile.length}</strong></span>` : ''}
           </div>
-          <button class="pile-badge draw-pile" data-action="deck-modal" title="点击查看完整牌组">
-            <strong>${c.drawPile.length}</strong>
-            <span>🎴 抽牌堆</span>
-          </button>
+          <div class="sts-console-actions">
+            <button class="button text small" data-action="exit-combat">🏳️ 撤退</button>
+            <button class="button acid end-turn-btn" data-action="combat-end-turn"${disabled(c.status !== 'active' || c.settling)}>
+              🔔 敲钟结束回合
+            </button>
+          </div>
         </div>
 
         <div class="card-hand-tray" role="region" aria-label="当前回合手牌">
           ${renderCombatHand(c)}
         </div>
-
-        <div class="sts-side-cluster right">
-          <button class="button acid end-turn-btn" data-action="combat-end-turn"${disabled(c.status !== 'active' || c.settling)}>
-            🔔 敲钟结束回合
-          </button>
-          <div class="pile-row">
-            <span class="pile-badge discard-pile"><strong>${c.discardPile.length}</strong><span>📥 弃牌堆</span></span>
-            <button class="button text small" data-action="exit-combat">🏳️ 撤退</button>
-          </div>
-        </div>
       </div>
     `) : `
       <div class="ring-lobby-console">
         <div class="lobby-warmup-bar">
-          <span class="tiny-label">擂台热身动作测试：</span>
-          <button class="button outline small" data-action="ring-anim" data-side="a" data-anim="jab">🥊 红角寸劲抽</button>
-          <button class="button outline small" data-action="ring-anim" data-side="a" data-anim="heavy">🔨 红角泰山压顶</button>
-          <button class="button outline small" data-action="ring-anim" data-side="a" data-anim="flurry">🌪️ 红角疾风连刺</button>
-          <button class="button outline small" data-action="ring-anim" data-side="b" data-anim="jab">🛡️ 蓝角反击演练</button>
+          <span class="anim-test-label">🔥 擂台实景打击测试：</span>
+          <button class="anim-btn" data-action="ring-anim" data-side="a" data-anim="jab">🥊 红角寸劲抽击</button>
+          <button class="anim-btn" data-action="ring-anim" data-side="a" data-anim="heavy">🔨 红角泰山压顶</button>
+          <button class="anim-btn" data-action="ring-anim" data-side="a" data-anim="flurry">🌪️ 红角疾风三连</button>
+          <button class="anim-btn" data-action="ring-anim" data-side="a" data-anim="buff">💪 红角充血超载</button>
+          <button class="anim-btn" data-action="ring-anim" data-side="b" data-anim="jab">🛡️ 蓝角反击演练</button>
         </div>
         <div class="arena-layout lobby-grid">
-          <section class="lobby-panel pve-roguelike-panel">
+          <section class="card pvp-card pve-roguelike-panel">
             <div class="play-kicker">ROGUELIKE DECKBUILDER · 杀戮尖塔肉鸽模式</div>
             <h2 class="card-heading">🔥 PVE 肉鸽卡牌擂台赛</h2>
-            <p class="card-description">与【${escapeHtml(playerB.username)}】展开回合制卡牌博弈！每场胜利不仅直接掠夺对手 1%–10% 真实尺寸，还能<strong>三选一构筑稀有招式卡</strong>！</p>
-            <div class="pve-actions-row">
-              <button class="button acid" data-action="start-pve-combat"${disabled(needsPlayer || anyGameBusy())}>${icon('spark')}敲钟开战 · PVE 卡牌对决</button>
-              <button class="button outline small" data-action="reroll-pve"${disabled(needsPlayer || anyGameBusy())}>🎲 换个陪练对手</button>
+            <p class="card-description">与蓝角对手【${escapeHtml(playerB.username)}】展开回合制卡牌博弈！每场胜利不仅直接掠夺对手 1%–10% 真实尺寸，还能<strong>三选一构筑稀有招式卡</strong>！</p>
+            <div class="lobby-cta-row">
+              <div>
+                <strong>当前蓝角陪练：${escapeHtml(playerB.username)}</strong>
+                <div class="small-copy muted">长 ${number(playerB.length)} cm · 径 ${number(playerB.diameter)} cm · HP ${derivedB.maxHp}</div>
+              </div>
+              <div class="lobby-cta-buttons">
+                <button class="button outline small" data-action="reroll-pve"${disabled(needsPlayer || anyGameBusy())}>🎲 换个陪练</button>
+                <button class="button acid" data-action="start-pve-combat"${disabled(needsPlayer || anyGameBusy())}>${icon('spark')}敲钟开战 · PVE 对决</button>
+              </div>
             </div>
-            <div class="qte-quick-strip">
+            <div class="lobby-cta-row" style="margin-top:12px">
               <div>
                 <strong>⚡ 打胶立式拳力机（QTE 特训）</strong>
-                <p class="small-copy muted">三段式黄金靶心测力冲刺，不打牌也能直接暴涨体积。</p>
+                <div class="small-copy muted">三段式黄金靶心测力冲刺，单人冲分直接暴涨牛子体积。</div>
               </div>
               <button class="button outline small" data-action="qte-open"${disabled(needsPlayer || anyGameBusy())}>${icon('spark')}开始打胶</button>
             </div>
           </section>
 
-          <section class="lobby-panel pvp-select-panel">
+          <section class="card pvp-card pvp-select-panel">
             <div class="play-kicker">RED VS BLUE · 真实玩家赌注挑战</div>
             <h2 class="card-heading">⚔️ PVP 选人约战台</h2>
             <p class="card-description">点选下方任意玩家即可将其牛子请上上方蓝角擂台，使用你构筑的肉鸽牌组正面对决并掠夺对方真实尺寸！</p>
             <div class="search-wrap"><label class="sr-only" for="opponent-search">搜索玩家用户名</label><input class="search-field" id="opponent-search" placeholder="输入对手拳台名号搜索…" value="${escapeHtml(state.search)}" autocomplete="off"></div>
             <div class="opponent-list" id="opponent-list">${opponentRows()}</div>
-            <button class="button wide" data-action="start-pvp-combat"${disabled(needsPlayer || !state.opponentId || anyGameBusy())}>${icon('dice')}向选中对手发起卡牌对决</button>
+            <button class="button acid wide" data-action="start-pvp-combat"${disabled(needsPlayer || !state.opponentId || anyGameBusy())}>${icon('dice')}向选中玩家发起卡牌对决</button>
           </section>
         </div>
       </div>
@@ -1159,7 +1312,25 @@ document.addEventListener('click', async event => {
   } else if (action === 'test-anim') {
     geometryControl?.triggerAction(button.dataset.anim || 'jab');
   } else if (action === 'ring-anim') {
-    battleControl?.triggerAction(button.dataset.side || 'a', button.dataset.anim || 'jab');
+    const side = button.dataset.side || 'a';
+    const anim = button.dataset.anim || 'jab';
+    const targetSide = side === 'a' ? 'b' : 'a';
+    battleControl?.triggerAction(side, anim);
+    if (anim === 'heavy') {
+      spawnFloater(targetSide, '-28 💥暴击', 'crit', 290);
+      triggerStageImpact(targetSide, 'heavy', 290);
+    } else if (anim === 'flurry') {
+      spawnFloater(targetSide, '-9 💥', 'damage', 180);
+      spawnFloater(targetSide, '-9 💥', 'damage', 330);
+      spawnFloater(targetSide, '-11 💥暴击', 'crit', 480);
+      triggerStageImpact(targetSide, 'normal', 220);
+    } else if (anim === 'buff') {
+      spawnFloater(side, '💪 刚猛 +3', 'buff', 120);
+      triggerStageImpact(side, 'light', 120);
+    } else {
+      spawnFloater(targetSide, '-14 💥', 'damage', 190);
+      triggerStageImpact(targetSide, 'normal', 190);
+    }
   } else if (action === 'shop') openModal('shop');
   else if (action === 'deck-modal') openModal('deck');
   else if (action === 'reset-run-deck') {
