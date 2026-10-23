@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "volumeFormula": "Math.PI * diameter * diameter * length / 4",
+  "initial": {
+    "length": { "mean": 12, "sigma": 2, "min": 6, "max": 18 },
+    "diameter": { "mean": 3.5, "sigma": 0.6, "min": 1.7, "max": 5.3 }
+  },
+  "pve": { "relativeSigma": 0.2, "minRatio": 0.5, "maxRatio": 1.5 },
+  "battle": {
+    "tiers": [
+      { "maxRatio": 1.25, "dice": 3 },
+      { "maxRatio": 1.5, "dice": 4 },
+      { "maxRatio": 2, "dice": 5 },
+      { "maxRatio": null, "dice": 6 }
+    ],
+    "keptDice": 3,
+    "rewardMin": 0.01,
+    "rewardMax": 0.1,
+    "tie": "draw"
+  },
+  "qte": {
+    "stages": 3,
+    "stageWeights": [20, 30, 50],
+    "stageDurationMs": 2500,
+    "durationMs": 7500,
+    "centerMin": 0.2,
+    "centerMax": 0.8,
+    "doubleRadius": 0.03,
+    "greenRadius": 0.1,
+    "grayRadius": 0.2,
+    "passScore": 60,
+    "volumeDivisor": 500
+  },
+  "TODO(USER_DESIGN)": [
+    "初始长度/直径的标准差 2 与 0.6、对称三倍标准差截断是工程初值，用户未逐项指定。",
+    "PVE 对应维度 20% 标准差、50%–150% 截断是工程初值。",
+    "平局结束且不转移属性是工程初值。",
+    "每段 2500ms、目标中心在 20%–80% 内随机是工程初值。",
+    "未按下的段落计 0 分；区间边界取较高分。",
+    "体积增减时长度和直径按同一立方根比例缩放。",
+    "装饰暂定每件 10 cm³；商品价格和每日次数限制尚未由用户逐项确认。",
+    "账号用户名 2–24、密码 6–128、PBKDF2 10 万次、7 天会话是工程默认值。"
+  ]
+}

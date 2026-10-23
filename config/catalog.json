@@ -1,0 +1,20 @@
+[
+  {"id": "a-cone", "slot": "a", "name": "圆锥形", "price": 10, "model": "anatomy", "description": "尖头造型，主打一个锐气。"},
+  {"id": "a-sphere", "slot": "a", "name": "圆球形", "price": 10, "model": "anatomy", "description": "圆润饱满，看着就好说话。"},
+  {"id": "a-heart", "slot": "a", "name": "爱心形", "price": 10, "model": "anatomy", "description": "长成爱心的形状，表白成功率未知。"},
+  {"id": "a-hook", "slot": "a", "name": "弯钩形", "price": 10, "model": "anatomy", "description": "带弯钩的造型，讲究一个巧劲。"},
+  {"id": "a-face", "slot": "a", "name": "立体人面形", "price": 10, "model": "anatomy", "description": "顶端长了一张脸，对视时请保持冷静。"},
+  {"id": "a-rocket", "slot": "a", "name": "火箭头形", "price": 10, "model": "anatomy", "description": "火箭头，随时准备点火升空。"},
+  {"id": "a-urchin", "slot": "a", "name": "海胆刺球形", "price": 10, "model": "anatomy", "description": "海胆刺球，只可远观，不可近身。"},
+  {"id": "b-spindle", "slot": "b", "name": "纺锤形", "price": 10, "model": "anatomy", "description": "两头细中间粗，力学上的奇迹。"},
+  {"id": "b-veins", "slot": "b", "name": "青筋凸起形", "price": 10, "model": "anatomy", "description": "青筋盘绕，看着就很努力。"},
+  {"id": "b-texture", "slot": "b", "name": "疱疹遍布形", "price": 10, "model": "anatomy", "description": "颗粒感拉满，密集恐惧症慎入。"},
+  {"id": "b-spikes", "slot": "b", "name": "狼牙棒形", "price": 10, "model": "anatomy", "description": "狼牙棒造型，威武霸气，请勿实战。"},
+  {"id": "b-spring", "slot": "b", "name": "弹簧形", "price": 10, "model": "anatomy", "description": "弹簧结构，能屈能伸，弹性十足。"},
+  {"id": "b-lettering", "slot": "b", "name": "铭文“NAMCHIEH”形", "price": 10, "model": "anatomy", "description": "刻着 NAMCHIEH 的铭文，认主防丢。"},
+  {"id": "c-sparse", "slot": "c", "name": "黑毛稀疏形", "price": 10, "model": "anatomy", "description": "稀疏几根，走清爽路线。"},
+  {"id": "c-fluffy", "slot": "c", "name": "黑毛茸茸形", "price": 10, "model": "anatomy", "description": "毛茸茸一团，视觉上很暖和。"},
+  {"id": "c-lush", "slot": "c", "name": "黑毛葱茏形", "price": 10, "model": "anatomy", "description": "郁郁葱葱，生命力旺盛。"},
+  {"id": "c-fins", "slot": "c", "name": "火箭尾翼形", "price": 10, "model": "anatomy", "description": "火箭尾翼，起飞的时候能稳一点。"},
+  {"id": "c-huge", "slot": "c", "name": "超级巨大形", "price": 10, "model": "anatomy", "description": "超级巨大，纯视觉冲击，不增加实际尺寸。"}
+]
