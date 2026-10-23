@@ -21,36 +21,33 @@ function disposeObject(object) {
 }
 
 // ==========================================================================
-// 牛子可运动骨骼/顶点柔性形变动画引擎 (Procedural Spine + Peristaltic Rig)
-// 支持：呼吸抱架(idle)、寸劲刺击(jab)、泰山压顶(heavy)、疾风连刺(flurry)、
-//      海绵体硬化(guard)、充血脉动(buff)、受击弹性震颤(hit)、击倒萎缩(ko)、胜利昂首(victory)
+// ==========================================================================
+// ==========================================================================
+// ==========================================================================
+// 牛子可运动骨骼与动力学动画引擎 (Procedural Fighter Mechanics Rig)
+// 支持：拳击抱架律动(idle)、寸劲刺击(jab)、泰山压顶(heavy)、疾风连刺(flurry)、
+//      海绵体硬化(guard)、充血超载(buff)、受击弹簧暴震(hit)、KO倒地(ko)、胜利加冕(victory)
 // ==========================================================================
 function createAnimatedRig(THREE, modelGroup, side = 'solo') {
-  const deformableMeshes = [];
   const box = new THREE.Box3().setFromObject(modelGroup);
   const minY = box.min.y;
   const maxY = box.max.y;
   const totalHeight = Math.max(0.5, maxY - minY);
-  const pivotY = minY + totalHeight * 0.18; // 阴囊上方、茎部根部作为弯曲枢轴
-  const shaftSpan = Math.max(0.4, maxY - pivotY);
 
-  modelGroup.traverse(node => {
-    if (!node.isMesh || !node.geometry?.attributes?.position) return;
-    const posAttr = node.geometry.attributes.position;
-    const origPos = new Float32Array(posAttr.array);
-    deformableMeshes.push({ mesh: node, posAttr, origPos });
-  });
+  // 获取层次化节点 (anatomy 躯干/步法, scrotum 双球摆动, upperNodes 柱身与龟头鞭打组)
+  const anatomyGroup = modelGroup.children[0] || modelGroup;
+  const scrotumGroup = anatomyGroup.children[0] || null;
+  const upperNodes = anatomyGroup.children.slice(2);
 
-  // 面向方向：solo 模式朝向镜头(+Z)，对决模式左方('a')朝右(+X)，右方('b')朝左(-X)
+  // 面向方向与角位
+  // solo 模式朝向镜头(+Z)，对决模式左方('a'红角)朝右(+X)稍偏镜头，右方('b'蓝角)朝左(-X)稍偏镜头
   const dirSign = side === 'a' ? 1 : side === 'b' ? -1 : 1;
-  const baseX = side === 'a' ? -1.58 : side === 'b' ? 1.58 : 0;
-  const baseRotY = side === 'a' ? Math.PI * 0.42 : side === 'b' ? -Math.PI * 0.42 : -0.42;
+  const baseX = side === 'a' ? -1.65 : side === 'b' ? 1.65 : 0;
+  const baseRotY = side === 'a' ? Math.PI * 0.44 : side === 'b' ? -Math.PI * 0.44 : -0.42;
 
-  // 初始化时立即设置到各自红蓝角站位，确保后续包围盒计算准确
-  modelGroup.position.x = baseX;
-  if (side !== 'solo') {
-    modelGroup.rotation.y = baseRotY;
-  }
+  // 初始化时定位到红蓝角站位并设定朝向
+  modelGroup.position.set(baseX, 0, 0);
+  modelGroup.rotation.y = baseRotY;
 
   const state = {
     action: 'idle',
@@ -59,11 +56,12 @@ function createAnimatedRig(THREE, modelGroup, side = 'solo') {
     posture: 'idle', // 'idle' | 'ko' | 'victory'
     powerStacks: 0,
     shieldActive: false,
-    phaseOffset: side === 'b' ? 1.7 : 0,
+    phaseOffset: side === 'b' ? 2.1 : 0,
+    lastActionTime: performance.now(),
   };
 
   // 护盾光环模型
-  const shieldGeo = new THREE.TorusGeometry(0.95, 0.035, 10, 48);
+  const shieldGeo = new THREE.TorusGeometry(1.05, 0.045, 12, 48);
   const shieldMat = new THREE.MeshBasicMaterial({
     color: side === 'b' ? 0x4ea8ff : 0xffd452,
     transparent: true,
@@ -72,12 +70,13 @@ function createAnimatedRig(THREE, modelGroup, side = 'solo') {
   });
   const shieldMesh = new THREE.Mesh(shieldGeo, shieldMat);
   shieldMesh.rotation.x = Math.PI / 2;
-  shieldMesh.position.y = minY + totalHeight * 0.45;
+  shieldMesh.position.y = minY + totalHeight * 0.48;
   modelGroup.add(shieldMesh);
 
   function trigger(actionName, durationMs = 780) {
     state.action = actionName;
     state.actionStart = performance.now();
+    state.lastActionTime = performance.now();
     if (actionName === 'ko' || actionName === 'victory') {
       state.posture = actionName;
       state.actionDuration = 999999;
@@ -104,186 +103,181 @@ function createAnimatedRig(THREE, modelGroup, side = 'solo') {
       progress = 0;
     }
 
-    // 默认呼吸与拳手步伐律动 (Boxer Bob & Weave)
-    let offsetX = 0;
-    let offsetY = 0;
-    let offsetZ = 0;
-    let bendForward = Math.sin(t * 3.2) * 0.08; // 沿自身朝向的前后弯曲角
-    let bendSide = Math.cos(t * 1.6) * 0.04;
-    let whipAmp = 0;
-    let whipFreq = 0;
-    let pulsePos = -1;
-    let pulseAmp = state.powerStacks > 0 ? 0.06 * Math.min(3, state.powerStacks) : 0;
-    let squashY = 1 + Math.sin(t * 3.2) * 0.025;
-    let scaleMult = 1 + Math.min(0.22, state.powerStacks * 0.035);
-
-    if (side !== 'solo') {
-      // 擂台对峙时的拳击碎步与抱架摇闪
-      offsetX = Math.sin(t * 3.2) * 0.07 * dirSign;
-      offsetY = Math.abs(Math.sin(t * 3.2)) * 0.06;
-      offsetZ = Math.cos(t * 1.6) * 0.04;
-      bendForward += 0.1; // 略微前倾备战
-    }
+    // 默认姿态与骨骼形变变量
+    let posX = baseX;
+    let posY = 0;
+    let posZ = 0;
+    let pitchX = 0;        // 躯干前俯/后仰 (正数向对手躬身出击，负数向后仰闪避受击)
+    let yawY = 0;          // 躯干水平微转
+    let tiltZ = 0;         // 左右摇摆步法 (Bob & Weave)
+    let upperPitchX = 0;   // 柱身与龟头前屈鞭打
+    let upperTiltZ = 0;    // 柱身横向甩动
+    let upperScaleX = 1;
+    let upperScaleY = 1;
+    let upperScaleZ = 1;
+    let scrotumPitchX = 0; // 蛋囊惯性前后摆动
 
     const act = state.action;
-    if (act === 'jab') {
-      // 蓄力后仰 -> 突进甩鞭抽击 -> 回收
-      if (progress < 0.28) {
-        const p = progress / 0.28;
-        offsetX = -0.28 * p * dirSign;
-        bendForward = -0.42 * p;
-        squashY = 1 - 0.08 * p;
-      } else if (progress < 0.62) {
-        const p = (progress - 0.28) / 0.34;
-        const ease = 1 - Math.pow(1 - p, 3);
-        offsetX = (-0.28 + 1.35 * ease) * dirSign;
-        bendForward = -0.42 + 1.12 * ease;
-        whipAmp = 0.22 * Math.sin(p * Math.PI);
-        whipFreq = p * 10;
-        squashY = 1 + 0.12 * Math.sin(p * Math.PI);
+
+    if (act === 'idle') {
+      // 鲜活的拳手抱架步法 (Boxer Bob & Weave + Rhythm)
+      const stepWave = Math.sin(t * 3.6);
+      const bobWave = Math.abs(Math.sin(t * 3.6));
+      const swayWave = Math.cos(t * 1.8);
+
+      if (side !== 'solo') {
+        posX += stepWave * 0.16 * dirSign;
+        posY += bobWave * 0.12;
+        posZ += swayWave * 0.10;
+        pitchX = 0.08 + stepWave * 0.06;
+        tiltZ = stepWave * 0.08 * dirSign;
+        upperPitchX = 0.08 + Math.sin(t * 3.6 + 0.5) * 0.12;
+        scrotumPitchX = -stepWave * 0.12;
       } else {
-        const p = (progress - 0.62) / 0.38;
-        offsetX = 1.07 * (1 - p) * dirSign;
-        bendForward = 0.7 * (1 - p) * Math.cos(p * Math.PI);
+        posY += bobWave * 0.08;
+        pitchX = 0.05 + stepWave * 0.04;
+        upperPitchX = Math.sin(t * 3.6 + 0.5) * 0.08;
+      }
+      upperScaleY = 1 + Math.sin(t * 3.6) * 0.04;
+    } else if (act === 'jab') {
+      // 寸劲刺击：后弓蓄势 -> 跨步穿过中线闪电抽打 -> 迅速收回
+      if (progress < 0.22) {
+        const k = progress / 0.22;
+        posX += -0.45 * k * dirSign;
+        posY += 0.06 * Math.sin(k * Math.PI);
+        pitchX = -0.32 * k;
+        upperPitchX = -0.38 * k;
+      } else if (progress < 0.52) {
+        const k = (progress - 0.22) / 0.30;
+        const ease = 1 - Math.pow(1 - k, 3);
+        posX += (-0.45 + 2.70 * ease) * dirSign; // 大幅前冲跨过中心线！
+        posY += Math.sin(k * Math.PI) * 0.14;
+        pitchX = -0.32 + 1.25 * ease;
+        upperPitchX = -0.38 + 1.55 * ease;
+        scrotumPitchX = -0.65 * ease;
+        upperScaleY = 1 + Math.sin(k * Math.PI) * 0.24;
+      } else {
+        const k = (progress - 0.52) / 0.48;
+        const easeOut = Math.pow(k, 1.8);
+        posX += 2.25 * (1 - easeOut) * dirSign;
+        pitchX = 0.93 * (1 - easeOut);
+        upperPitchX = 1.17 * (1 - easeOut);
+        scrotumPitchX = -0.65 * (1 - easeOut);
       }
     } else if (act === 'heavy') {
-      // 泰山压顶：高高跃起后仰蓄力 -> 跨步重砸下劈 -> 震地回弹
-      if (progress < 0.38) {
-        const p = progress / 0.38;
-        offsetX = -0.35 * p * dirSign;
-        offsetY = Math.sin(p * Math.PI * 0.5) * 0.55;
-        bendForward = -0.68 * p;
-        pulsePos = p;
-        pulseAmp += 0.18;
-      } else if (progress < 0.68) {
-        const p = (progress - 0.38) / 0.30;
-        offsetX = (-0.35 + 1.55 * p) * dirSign;
-        offsetY = 0.55 * (1 - p);
-        bendForward = -0.68 + 1.62 * Math.pow(p, 1.4);
-        squashY = 1 - 0.14 * Math.sin(p * Math.PI);
+      // 泰山压顶：下蹲屈身蓄力 -> 高高跃入空中空中后仰 -> 战斧下砸重扣擂台
+      if (progress < 0.34) {
+        const k = progress / 0.34;
+        posX += -0.40 * k * dirSign;
+        posY += Math.sin(k * Math.PI * 0.5) * 2.45;
+        pitchX = -0.75 * k;
+        upperPitchX = -0.85 * k;
+        upperScaleY = 1 + 0.30 * k;
+      } else if (progress < 0.46) {
+        posY = 2.45;
+        posX += -0.40 * dirSign;
+        pitchX = -0.75;
+        upperPitchX = -0.85;
+        upperScaleY = 1.30;
+      } else if (progress < 0.70) {
+        const k = (progress - 0.46) / 0.24;
+        const easeDrop = Math.pow(k, 2.6);
+        posY = 2.45 * (1 - easeDrop);
+        posX += (-0.40 + 2.95 * easeDrop) * dirSign;
+        pitchX = -0.75 + 2.15 * easeDrop;
+        upperPitchX = -0.85 + 2.45 * easeDrop;
+        upperScaleY = 1.30 - 0.45 * easeDrop;
+        upperScaleX = 1 + 0.35 * easeDrop;
+        upperScaleZ = 1 + 0.35 * easeDrop;
       } else {
-        const p = (progress - 0.68) / 0.32;
-        offsetX = 1.2 * (1 - p) * dirSign;
-        bendForward = 0.94 * (1 - p);
-        squashY = 1 + 0.08 * Math.sin(p * Math.PI * 2) * (1 - p);
+        const k = (progress - 0.70) / 0.30;
+        posY = Math.sin(k * Math.PI) * 0.38;
+        posX += 2.55 * (1 - k) * dirSign;
+        pitchX = 1.40 * (1 - k);
+        upperPitchX = 1.60 * (1 - k);
       }
     } else if (act === 'flurry') {
-      // 疾风连打：高频三次突刺 + 茎部波浪鞭打
+      // 疾风三连抽：近身高速连续三次左右抽打
       const cycle = Math.sin(progress * Math.PI * 6);
       const env = Math.sin(progress * Math.PI);
-      offsetX = (0.55 * env + 0.38 * Math.max(0, cycle)) * dirSign;
-      offsetY = Math.abs(cycle) * 0.08;
-      bendForward = 0.45 * cycle * env + 0.15;
-      whipAmp = 0.32 * env;
-      whipFreq = progress * 24;
+      posX += (1.75 * env + 0.40 * Math.max(0, cycle)) * dirSign;
+      posY += Math.abs(cycle) * 0.16;
+      pitchX = 0.55 * env + 0.35 * Math.max(0, cycle);
+      upperPitchX = 0.65 * env + 0.65 * Math.max(0, cycle);
+      upperTiltZ = Math.cos(progress * Math.PI * 6) * 0.55 * dirSign;
+      upperScaleY = 1 + 0.18 * Math.abs(cycle);
     } else if (act === 'guard') {
-      // 海绵体硬化：下沉扎马步 + 茎部粗壮膨胀 + 护盾亮起
+      // 海绵体硬化：下沉马步 + 躯体显著增粗 + 护盾光环
       const env = Math.sin(progress * Math.PI);
-      offsetY = -0.08 * env;
-      bendForward = -0.18 * env;
-      squashY = 1 - 0.12 * env;
-      pulsePos = 0.5;
-      pulseAmp += 0.24 * env;
+      posY += -0.32 * env;
+      pitchX = -0.15 * env;
+      upperScaleX = 1 + 0.42 * env;
+      upperScaleZ = 1 + 0.42 * env;
+      upperScaleY = 1 - 0.18 * env;
     } else if (act === 'buff') {
-      // 寸止蓄力/充血超载：自根部向龟头传递明显的充血蠕动波 + 昂首挺立
+      // 充血超载：昂首挺拔 + 金光脉冲 + 粗长双增
       const env = Math.sin(progress * Math.PI);
-      offsetY = 0.16 * env;
-      bendForward = -0.25 * Math.sin(progress * Math.PI * 2);
-      pulsePos = progress * 1.15;
-      pulseAmp += 0.32 * env;
-      squashY = 1 + 0.14 * env;
+      posY += 0.45 * env;
+      pitchX = -0.35 * Math.sin(progress * Math.PI * 2);
+      upperScaleX = 1 + 0.28 * env;
+      upperScaleZ = 1 + 0.28 * env;
+      upperScaleY = 1 + 0.48 * env;
     } else if (act === 'hit') {
-      // 受击硬直：向后猛烈弯折 + 阻尼弹簧震颤 (Punching Bag Recoil)
-      const decay = Math.exp(-progress * 4.2);
-      const osc = Math.cos(progress * Math.PI * 5.5);
-      offsetX = -0.42 * decay * Math.max(0, osc) * dirSign;
-      bendForward = -0.82 * decay * osc;
-      bendSide = 0.25 * decay * Math.sin(progress * Math.PI * 4);
-      squashY = 1 - 0.1 * decay * Math.abs(osc);
+      // 受击暴震：向绳圈方向大退 + 弹簧式震荡后仰
+      const decay = Math.exp(-progress * 4.6);
+      const osc = Math.cos(progress * Math.PI * 6.5);
+      posX += (-1.40 * decay - 0.35 * decay * osc) * dirSign;
+      posY += 0.25 * decay * Math.max(0, osc);
+      pitchX = -1.15 * decay * osc;
+      upperPitchX = -1.35 * decay * osc;
+      scrotumPitchX = 0.75 * decay * osc;
     } else if (act === 'ko') {
-      // 击倒萎缩：软塌前垂、缩水趴地
-      const p = clamp(elapsed / 600, 0, 1);
-      offsetY = -0.22 * p;
-      bendForward = 1.18 * p;
-      squashY = 1 - 0.22 * p;
-      scaleMult = 1 - 0.18 * p;
+      // 击倒瘫软：彻底倒在帆布垫上
+      const p = clamp(elapsed / 650, 0, 1);
+      posY = -0.42 * p;
+      pitchX = 1.55 * p;
+      upperPitchX = 0.45 * p;
+      upperScaleX = 1 - 0.25 * p;
+      upperScaleY = 1 - 0.28 * p;
+      upperScaleZ = 1 - 0.25 * p;
     } else if (act === 'victory') {
-      // 胜利加冕：昂首挺胸 + 欢庆律动
-      offsetY = Math.abs(Math.sin(t * 5.5)) * 0.18;
-      bendForward = -0.18 + Math.sin(t * 5.5) * 0.22;
-      pulsePos = (t * 1.4) % 1.2;
-      pulseAmp += 0.2;
-      scaleMult += 0.1;
+      // 胜利加冕：跃起欢呼 + 360°旋转
+      posY = Math.abs(Math.sin(t * 6)) * 0.72;
+      yawY = t * 4.5;
+      pitchX = Math.sin(t * 6) * 0.25;
+      upperPitchX = Math.cos(t * 6) * 0.35;
+      upperScaleY = 1.18;
+    }
+
+    // 强化层数额外体型增益
+    if (state.powerStacks > 0) {
+      const pScale = 1 + Math.min(0.28, state.powerStacks * 0.045);
+      upperScaleX *= pScale;
+      upperScaleZ *= pScale;
+      upperScaleY *= pScale;
     }
 
     // 更新护盾光环
-    const targetShieldOpacity = (state.shieldActive || act === 'guard') ? 0.58 : 0;
+    const targetShieldOpacity = (state.shieldActive || act === 'guard') ? 0.65 : 0;
     shieldMat.opacity += (targetShieldOpacity - shieldMat.opacity) * 0.18;
     if (shieldMat.opacity > 0.01) {
-      shieldMesh.rotation.z = t * 1.8;
-      const s = 1 + Math.sin(t * 4) * 0.05;
+      shieldMesh.rotation.z = t * 2.2;
+      const s = 1 + Math.sin(t * 5) * 0.08;
       shieldMesh.scale.set(s, s, 1);
     }
 
-    // 应用根节点位移与缩放
-    modelGroup.position.x = baseX + offsetX;
-    modelGroup.position.y = offsetY;
-    modelGroup.position.z = offsetZ;
-    if (side !== 'solo') {
-      modelGroup.rotation.y = baseRotY;
-    }
-    modelGroup.scale.setScalar(scaleMult);
+    // 驱动骨骼节点属性
+    modelGroup.position.set(posX, posY, posZ);
+    anatomyGroup.rotation.set(pitchX, yawY, tiltZ);
 
-    // 顶点级柔性脊椎弯曲与充血脉动形变
-    const radialSquash = 1 / Math.sqrt(Math.max(0.6, squashY));
-    for (const { posAttr, origPos } of deformableMeshes) {
-      const arr = posAttr.array;
-      for (let i = 0; i < origPos.length; i += 3) {
-        const x0 = origPos[i];
-        const y0 = origPos[i + 1];
-        const z0 = origPos[i + 2];
+    upperNodes.forEach(node => {
+      node.rotation.x = upperPitchX;
+      node.rotation.z = upperTiltZ;
+      node.scale.set(upperScaleX, upperScaleY, upperScaleZ);
+    });
 
-        if (y0 <= pivotY) {
-          // 阴囊底座：跟随惯性微幅钟摆晃动
-          const ballRatio = clamp((pivotY - y0) / Math.max(0.2, pivotY - minY), 0, 1);
-          const swingZ = -bendForward * 0.18 * ballRatio;
-          arr[i] = x0 * radialSquash;
-          arr[i + 1] = pivotY + (y0 - pivotY) * squashY;
-          arr[i + 2] = z0 * radialSquash + swingZ;
-        } else {
-          // 茎部与龟头：非线性脊椎弯曲 + 鞭打波 + 充血蠕动波
-          const h = clamp((y0 - pivotY) / shaftSpan, 0, 1.25);
-          const hCurve = Math.pow(h, 1.55);
-          const whip = whipAmp ? whipAmp * Math.sin(h * Math.PI * 2.2 - whipFreq) * h : 0;
-          const angleZ = bendForward * hCurve + whip;
-          const angleX = bendSide * hCurve;
-
-          let pulse = 1;
-          if (pulsePos >= 0 && pulseAmp > 0) {
-            const dist = h - pulsePos;
-            pulse += pulseAmp * Math.exp(-(dist * dist) / 0.045);
-          } else if (pulseAmp > 0) {
-            pulse += pulseAmp * (0.5 + 0.5 * Math.sin(t * 5 - h * 3));
-          }
-
-          const rScale = radialSquash * pulse;
-          const localX = x0 * rScale;
-          const localZ = z0 * rScale;
-          const localY = (y0 - pivotY) * squashY;
-
-          // 在自身局部坐标系中沿 +Z (腹侧/前向) 弯曲
-          const sinZ = Math.sin(angleZ);
-          const cosZ = Math.cos(angleZ);
-          const curvedY = localY * cosZ - localZ * sinZ;
-          const curvedZ = localZ * cosZ + localY * (sinZ * 0.58);
-          const curvedX = localX + localY * Math.sin(angleX) * 0.45;
-
-          arr[i] = curvedX;
-          arr[i + 1] = pivotY + curvedY;
-          arr[i + 2] = curvedZ;
-        }
-      }
-      posAttr.needsUpdate = true;
+    if (scrotumGroup) {
+      scrotumGroup.rotation.x = scrotumPitchX;
     }
   }
 
@@ -408,6 +402,7 @@ export async function mountAnatomy(root, profile, options = {}) {
     renderer.domElement.style.height = '100%';
     root.innerHTML = '';
     root.append(renderer.domElement);
+    control.canvas = renderer.domElement;
 
     model = buildAnatomyModel(THREE, profile, colors);
     model.rotation.y = -.42;
@@ -698,6 +693,7 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
     renderer.domElement.style.height = '100%';
     root.innerHTML = '';
     root.append(renderer.domElement);
+    control.canvas = renderer.domElement;
 
     scene.add(new THREE.HemisphereLight(0xfff8ea, 0x3b2c22, 2.2));
     const key = new THREE.DirectionalLight(0xfff2de, 3.8);
@@ -894,6 +890,7 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
       camera.updateProjectionMatrix();
     };
     fit();
+    control.resize = fit;
     observer = new ResizeObserver(fit);
     observer.observe(root);
 
@@ -912,10 +909,28 @@ export async function mountDuel(root, playerA, playerB, options = {}) {
       }
     }
 
+    let lastSparringTime = performance.now();
+
     const tick = now => {
       if (disposed) return;
       rigA?.update(now);
       rigB?.update(now);
+
+      // 待命状态下自动实景试探交锋 (Auto-sparring rhythm)
+      if (!reduced && !options.winnerId && now - lastSparringTime > 4200) {
+        lastSparringTime = now;
+        if (rigA?.state.action === 'idle' && rigB?.state.action === 'idle') {
+          const sparringSide = Math.random() < 0.5 ? 'a' : 'b';
+          const sparringRig = sparringSide === 'a' ? rigA : rigB;
+          const otherRig = sparringSide === 'a' ? rigB : rigA;
+          sparringRig.trigger('jab', 680);
+          setTimeout(() => {
+            if (!disposed && otherRig?.state.action === 'idle') {
+              otherRig.trigger('guard', 480);
+            }
+          }, 180);
+        }
+      }
 
       // 空中冲击波扩散动画
       if (shockwave?.userData.activeStart) {

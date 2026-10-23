@@ -46,7 +46,7 @@ function createPreviewOpponent(basePlayer) {
 }
 
 const state = {
-  user: null, player: null, rules: {}, catalog: [], tab: 'identity', modal: null,
+  user: null, player: null, rules: {}, catalog: [], tab: 'arena', modal: null,
   authMode: 'login', authUsername: '', authError: '', pending: new Set(),
   players: [], playersLoaded: false, playersLoading: false, search: '', opponentId: null,
   leaderboard: [], leaderboardLoaded: false, leaderboardLoading: false, metric: 'volume', order: 'desc',
@@ -294,7 +294,11 @@ function sync3DCombatPostures() {
 }
 
 function startCardCombat(kind = 'pve') {
-  if (!state.player || anyGameBusy()) return;
+  if (anyGameBusy()) return;
+  if (kind === 'pvp' && !state.player) {
+    toast('PVP 对决需要先在【牛子身份证】注册你专属的牛子！', true);
+    return;
+  }
   let opponentProfile;
   if (kind === 'pvp') {
     opponentProfile = state.players.find(p => p.userId === state.opponentId);
@@ -307,9 +311,18 @@ function startCardCombat(kind = 'pve') {
     state.pvePreviewOpponent = opponentProfile;
   }
 
-  const fStats = deriveCombatStats(state.player);
+  const playerProfile = state.player ? structuredClone(state.player) : {
+    userId: 'guest-fighter',
+    username: '试训红角拳手',
+    length: 12.0,
+    diameter: 3.5,
+    colors: DEFAULT_COLORS,
+    equipped: {},
+  };
+
+  const fStats = deriveCombatStats(playerProfile);
   const eStats = deriveCombatStats(opponentProfile);
-  const fullDeck = buildPlayerDeck(state.player, state.draftedCards);
+  const fullDeck = buildPlayerDeck(playerProfile, state.draftedCards);
 
   const combat = {
     id: requestId(),
@@ -319,7 +332,7 @@ function startCardCombat(kind = 'pve') {
     settling: false,
     log: `🔔 第 1 回合敲钟开战！每回合拥有 3⚡ 精力，点击手牌向【${opponentProfile.username}】出招！`,
     fighter: {
-      profile: structuredClone(state.player),
+      profile: playerProfile,
       stats: fStats,
       hp: fStats.maxHp,
       maxHp: fStats.maxHp,
@@ -936,8 +949,8 @@ function renderArena() {
                 <div class="small-copy muted">长 ${number(playerB.length)} cm · 径 ${number(playerB.diameter)} cm · HP ${derivedB.maxHp}</div>
               </div>
               <div class="lobby-cta-buttons">
-                <button class="button outline small" data-action="reroll-pve"${disabled(needsPlayer || anyGameBusy())}>🎲 换个陪练</button>
-                <button class="button acid" data-action="start-pve-combat"${disabled(needsPlayer || anyGameBusy())}>${icon('spark')}敲钟开战 · PVE 对决</button>
+                <button class="button outline small" data-action="reroll-pve"${disabled(anyGameBusy())}>🎲 换个陪练</button>
+                <button class="button acid" data-action="start-pve-combat"${disabled(anyGameBusy())}>${icon('spark')}敲钟开战 · PVE 卡牌对决</button>
               </div>
             </div>
             <div class="lobby-cta-row" style="margin-top:12px">
@@ -1051,14 +1064,10 @@ function render() {
   renderNavigation();
   if (!state.ready) return;
 
-  // 在游乐场标签下，如果已经有挂载好的 3D 擂台 canvas，我们先保存它的 DOM 节点再恢复，避免出牌时闪烁重建 WebGL！
-  const existingStage = state.tab === 'arena' ? $('[data-battle-stage] canvas') : null;
-  const existingStageRoot = existingStage ? existingStage.parentElement : null;
-
   app.innerHTML = state.tab === 'identity' ? renderIdentity() : state.tab === 'arena' ? renderArena() : renderRanking();
   renderModal();
   mountStage();
-  mountBattleStage(existingStageRoot);
+  mountBattleStage();
 }
 
 async function mountStage() {
@@ -1086,7 +1095,7 @@ function fighterSignature(p) {
   return `${p.userId || p.username}:${Number(p.length).toFixed(2)}:${Number(p.diameter).toFixed(2)}:${JSON.stringify(p.colors)}:${JSON.stringify(p.equipped)}`;
 }
 
-async function mountBattleStage(preservedRoot = null) {
+async function mountBattleStage() {
   const root = $('[data-battle-stage]');
   if (!root || state.tab !== 'arena') {
     battleControl?.dispose();
@@ -1095,13 +1104,24 @@ async function mountBattleStage(preservedRoot = null) {
     return;
   }
 
-  const playerA = state.combat?.fighter?.profile || state.player || { username: '红角拳手', length: 12, diameter: 3.5, colors: DEFAULT_COLORS };
+  const playerA = state.combat?.fighter?.profile || state.player || {
+    userId: 'guest-fighter',
+    username: '试训红角拳手',
+    length: 12,
+    diameter: 3.5,
+    colors: DEFAULT_COLORS,
+    equipped: {},
+  };
   const playerB = getActiveArenaOpponent();
   const sig = `${fighterSignature(playerA)}|${fighterSignature(playerB)}`;
 
-  // 如果对阵双方模型未变且已有存活的 WebGL 实例，直接复用原画布以保持 60fps 连续骨骼动画！
-  if (battleControl && mountedBattleSignature === sig && preservedRoot?.querySelector('canvas')) {
-    root.replaceWith(preservedRoot);
+  // 如果对阵双方模型未变且已有存活的 WebGL 实例，直接复用 canvas 节点，保证 60fps 连续动画绝不闪烁重载！
+  if (battleControl?.canvas && mountedBattleSignature === sig) {
+    if (!root.contains(battleControl.canvas)) {
+      root.innerHTML = '';
+      root.append(battleControl.canvas);
+    }
+    battleControl.resize?.();
     sync3DCombatPostures();
     return;
   }
@@ -1115,13 +1135,16 @@ async function mountBattleStage(preservedRoot = null) {
     if (token !== battleToken || !root.isConnected) return;
     const control = await mountDuel(root, playerA, playerB, {
       animate: Boolean(state.combat),
+      winnerId: state.combat?.status === 'victory' ? playerA.userId : state.combat?.status === 'defeat' ? playerB.userId : null,
     });
-    if (token !== battleToken || !root.isConnected) control.dispose();
-    else {
+    if (token !== battleToken || !root.isConnected) {
+      control.dispose();
+    } else {
       battleControl = control;
       sync3DCombatPostures();
     }
-  } catch {
+  } catch (err) {
+    console.error('mountDuel error:', err);
     root.innerHTML = '<div class="empty-state">3D 擂台暂不可用，卡牌战斗依然有效。</div>';
   }
 }
